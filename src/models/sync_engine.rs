@@ -1,3 +1,4 @@
+// File: src/models/sync_engine.rs
 use std::time::Instant;
 
 /// Drives playback timing independently from the render loop.
@@ -51,7 +52,9 @@ impl SyncEngine {
     }
 
     pub fn seek(&mut self, time: f64) {
-        self.current_time = time.clamp(0.0, self.duration);
+        // Unclamped from self.duration - lets you dynamically scrub & scroll out
+        // into the empty bounds area flawlessly!
+        self.current_time = time.max(0.0);
         self.last_tick = Instant::now();
     }
 
@@ -67,6 +70,7 @@ impl SyncEngine {
 
         if self.state == PlaybackState::Playing {
             self.current_time += dt;
+            // Stop playing naturally if we hit the red boundary marker
             if self.current_time >= self.duration {
                 self.current_time = self.duration;
                 self.pause();

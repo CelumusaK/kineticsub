@@ -87,7 +87,8 @@ impl GpuContext {
             format,
             width: size.width,
             height: size.height,
-            present_mode: PresentMode::Fifo,
+            // Disabled V-Sync to allow uncapped FPS
+            present_mode: PresentMode::AutoNoVsync,
             alpha_mode: CompositeAlphaMode::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -121,6 +122,7 @@ impl GpuContext {
     fn render(&mut self, vm: &mut EditorViewModel, inspector_tab: &mut InspectorTab) {
         // Poll Whisper background thread
         vm.poll_whisper();
+        vm.poll_render(); 
         
         // Advance playback clock
         vm.tick();
@@ -190,7 +192,7 @@ impl GpuContext {
             self.egui_renderer.free_texture(id);
         }
 
-        if vm.is_playing() || vm.whisper_is_running() {
+        if vm.is_playing() || vm.whisper_is_running() || vm.show_fps {
             self.window.request_redraw();
         }
     }
@@ -241,7 +243,7 @@ impl ApplicationHandler for App {
 
             WindowEvent::RedrawRequested => {
                 gpu.render(&mut self.vm, &mut self.inspector_tab);
-                if self.vm.is_playing() || self.vm.whisper_is_running() {
+                if self.vm.is_playing() || self.vm.whisper_is_running() || self.vm.show_fps {
                     gpu.window.request_redraw();
                 }
             }
@@ -252,7 +254,7 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(gpu) = &self.gpu {
-            if self.vm.is_playing() || self.vm.whisper_is_running() {
+            if self.vm.is_playing() || self.vm.whisper_is_running() || self.vm.show_fps {
                 gpu.window.request_redraw();
             }
         }
