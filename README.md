@@ -51,8 +51,8 @@ KineticSub-RS is built on a modern Rust ecosystem:
 ### Installation
 Clone the repository:
 ```bash
-git clone https://github.com/yourusername/kineticsub-rs.git
-cd kineticsub-rs
+git clone https://github.com/CelumusaK/kineticsub.git
+cd kineticsub
 
 Run the application:
 (It is highly recommended to run in release mode, as audio processing and Whisper AI inference are heavily computationally bound).
