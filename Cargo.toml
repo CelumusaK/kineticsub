@@ -1,0 +1,49 @@
+[package]
+name = "kineticsub"
+version = "0.2.0"
+edition = "2021"
+
+[[bin]]
+name = "kineticsub"
+path = "src/main.rs"
+
+[lib]
+name = "kineticsub"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+# Windowing & GPU
+winit       = "0.30"
+wgpu        = "22"
+pollster    = "0.3"
+
+# UI
+egui        = "0.29"
+egui-wgpu   = "0.29"
+egui-winit  = "0.29"
+
+# Serialisation
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+
+# Utilities
+log         = "0.4"
+env_logger  = "0.11"
+
+# File Dialogs for Save/Load
+rfd = "0.14"
+
+# Whisper and Audio Decoding
+whisper-rs = "0.16.0"
+hound = "3.5"
+symphonia = { version = "0.5", features = ["all"] }
+
+# Audio Playback
+rodio = { version = "0.19", features = ["symphonia-all"] }
+
+# Downloading the Whisper Model
+reqwest = { version = "0.12", features = ["blocking"] }
+
+# Generating unique IDs for Keyframes
+uuid = { version = "1.8", features = ["v4"] }
