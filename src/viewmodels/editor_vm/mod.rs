@@ -19,13 +19,26 @@ pub enum KeyframeMode {
     Record,
 }
 
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum TranscribeMode {
+    #[default]
+    Phrase,
+    Word,
+}
+
 pub struct EditorViewModel {
     pub project: Project,
     pub filepath: Option<std::path::PathBuf>,
     pub sync: SyncEngine,
 
+    // ── History & Undo ─────────────────────────────────────────────
+    pub history: Vec<Project>,
+    pub history_index: usize,
+    pub pending_snapshot: bool,
+
     pub selected_id: Option<String>,
     pub selected_ids: HashSet<String>,
+    pub selected_path_node: Option<usize>,
 
     pub timeline_zoom: f32,
     pub timeline_scroll: f64,
@@ -34,6 +47,7 @@ pub struct EditorViewModel {
     pub whisper_rx: Option<mpsc::Receiver<WhisperMessage>>,
     pub whisper_status: String,
     pub transcribing_media_id: Option<String>,
+    pub transcribe_mode: TranscribeMode,
 
     pub next_id: u32,
     pub keyframe_mode: KeyframeMode,
@@ -58,7 +72,7 @@ pub struct EditorViewModel {
 impl EditorViewModel {
     pub fn new() -> Self {
         let duration = 10.0;
-        Self {
+        let mut vm = Self {
             project: Project { 
                 name: "Untitled".into(), 
                 media_files: vec![], 
@@ -69,14 +83,23 @@ impl EditorViewModel {
             },
             filepath: None,
             sync: SyncEngine::new(duration),
+            
+            history: Vec::new(),
+            history_index: 0,
+            pending_snapshot: false,
+
             selected_id: None,
             selected_ids: HashSet::new(),
+            selected_path_node: None,
             timeline_zoom: 100.0,
             timeline_scroll: 0.0,
             new_sub_text: String::new(),
+            
             whisper_rx: None,
             whisper_status: String::new(),
             transcribing_media_id: None,
+            transcribe_mode: TranscribeMode::default(),
+            
             next_id: 0,
             keyframe_mode: KeyframeMode::Off,
             box_select_start: None,
@@ -91,7 +114,11 @@ impl EditorViewModel {
             render_progress: 0.0,
             render_status: String::new(),
             render_rx: None,
-        }
+        };
+
+        // Initialize history with empty project
+        vm.history.push(vm.project.clone());
+        vm
     }
 
     pub fn update_duration(&mut self) {

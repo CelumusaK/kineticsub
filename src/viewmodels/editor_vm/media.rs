@@ -1,5 +1,5 @@
 use std::sync::mpsc;
-use super::EditorViewModel;
+use super::{EditorViewModel, TranscribeMode};
 use crate::models::types::{MediaFile, Subtitle};
 use crate::services::whisper_service::{spawn_transcription, WhisperMessage};
 
@@ -23,6 +23,7 @@ impl EditorViewModel {
                 color: None,
             });
             self.update_duration();
+            self.snapshot();
         }
     }
 
@@ -39,6 +40,7 @@ impl EditorViewModel {
             color: Some([0.05, 0.05, 0.05, 1.0]), // Dark grey
         });
         self.update_duration();
+        self.snapshot();
     }
 
     pub fn toggle_media_timeline(&mut self, id: &str) {
@@ -46,6 +48,7 @@ impl EditorViewModel {
             media.on_timeline = !media.on_timeline;
         }
         self.update_duration();
+        self.snapshot();
     }
 
     pub fn move_media(&mut self, index: usize, delta_secs: f64) {
@@ -67,6 +70,7 @@ impl EditorViewModel {
                 sub.timeline_end   = (sub.timeline_end   + actual_delta).max(sub.timeline_start + 0.05);
             }
         }
+        self.mark_modified();
         self.update_duration();
     }
 
@@ -106,19 +110,69 @@ impl EditorViewModel {
                             }
                         };
 
-                        for w in words {
-                            let abs_start = offset + w.start;
-                            let abs_end   = offset + w.end;
-                            let mut sub = Subtitle::new(&self.next_id_str(), &w.text, abs_start, abs_end);
-                            sub.media_id = Some(media_id.clone());
-                            self.project.subtitles.push(sub);
+                        let mut next_id = self.next_id;
+
+                        match self.transcribe_mode {
+                            TranscribeMode::Word => {
+                                for w in words {
+                                    let abs_start = offset + w.start;
+                                    let abs_end   = offset + w.end;
+                                    let mut sub = Subtitle::new(&format!("sub_{}", next_id), &w.text, abs_start, abs_end);
+                                    next_id += 1;
+                                    sub.media_id = Some(media_id.clone());
+                                    self.project.subtitles.push(sub);
+                                }
+                            }
+                            TranscribeMode::Phrase => {
+                                let mut current_phrase: std::vec::Vec<crate::models::types::SubtitleWord> = Vec::new();
+                                
+                                let flush_phrase = |phrase: &mut Vec<crate::models::types::SubtitleWord>, proj: &mut crate::models::types::Project, nid: &mut u32| {
+                                    if phrase.is_empty() { return; }
+                                    let start = phrase.first().unwrap().start;
+                                    let end = phrase.last().unwrap().end;
+                                    let text = phrase.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+                                    
+                                    let mut sub = Subtitle::new(&format!("sub_{}", *nid), &text, start, end);
+                                    *nid += 1;
+                                    
+                                    sub.words = phrase.clone();
+                                    sub.media_id = Some(media_id.clone());
+                                    proj.subtitles.push(sub);
+                                    phrase.clear();
+                                };
+
+                                for w in words {
+                                    let abs_start = offset + w.start;
+                                    let abs_end   = offset + w.end;
+                                    
+                                    let is_end = w.text.ends_with('.') || w.text.ends_with('?') || w.text.ends_with('!') || w.text.ends_with(',');
+
+                                    if !current_phrase.is_empty() {
+                                        let last_end = current_phrase.last().unwrap().end;
+                                        if abs_start - last_end > 0.4 || current_phrase.len() >= 6 {
+                                            flush_phrase(&mut current_phrase, &mut self.project, &mut next_id);
+                                        }
+                                    }
+                                    
+                                    current_phrase.push(crate::models::types::SubtitleWord { 
+                                        text: w.text.clone(), start: abs_start, end: abs_end, custom_color: None 
+                                    });
+                                    
+                                    if is_end {
+                                        flush_phrase(&mut current_phrase, &mut self.project, &mut next_id);
+                                    }
+                                }
+                                flush_phrase(&mut current_phrase, &mut self.project, &mut next_id);
+                            }
                         }
 
+                        self.next_id = next_id;
                         self.sort_subtitles();
                         self.update_duration();
                         self.whisper_status = "Done!".into();
                         self.whisper_rx = None;
                         self.transcribing_media_id = None;
+                        self.snapshot(); // Commit to history
                     }
                     WhisperMessage::Error(err) => {
                         self.whisper_status = format!("Error: {}", err);

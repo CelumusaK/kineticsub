@@ -19,7 +19,7 @@ struct App {
     gpu: Option<GpuContext>,
     vm: EditorViewModel,
     inspector_tab: InspectorTab,
-    modifiers: winit::keyboard::ModifiersState, // Added to track Ctrl/Shift
+    modifiers: winit::keyboard::ModifiersState,
 }
 
 struct GpuContext {
@@ -87,7 +87,6 @@ impl GpuContext {
             format,
             width: size.width,
             height: size.height,
-            // Disabled V-Sync to allow uncapped FPS
             present_mode: PresentMode::AutoNoVsync,
             alpha_mode: CompositeAlphaMode::Auto,
             view_formats: vec![],
@@ -120,11 +119,8 @@ impl GpuContext {
     }
 
     fn render(&mut self, vm: &mut EditorViewModel, inspector_tab: &mut InspectorTab) {
-        // Poll Whisper background thread
         vm.poll_whisper();
         vm.poll_render(); 
-        
-        // Advance playback clock
         vm.tick();
 
         let output = match self.surface.get_current_texture() {
@@ -138,12 +134,17 @@ impl GpuContext {
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
         let raw_input = self.egui_state.take_egui_input(&self.window);
+        
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
             views::top_bar::draw(ctx, vm);
             views::timeline::draw(ctx, vm);
             views::left_panel::draw(ctx, vm);
             views::inspector::draw(ctx, vm, inspector_tab);
             views::canvas::draw(ctx, vm);
+
+            // ── Auto-Commit History Snapshots when drag ends
+            let pointer_down = ctx.input(|i| i.pointer.any_down());
+            vm.maybe_snapshot(pointer_down);
         });
 
         self.egui_state.handle_platform_output(&self.window, full_output.platform_output);
@@ -227,6 +228,7 @@ impl ApplicationHandler for App {
 
             WindowEvent::KeyboardInput { event: KeyEvent { physical_key: PhysicalKey::Code(code), state: ElementState::Pressed, .. }, .. } => {
                 let ctrl = self.modifiers.control_key();
+                let shift = self.modifiers.shift_key();
                 
                 match code {
                     KeyCode::Space => self.vm.toggle_play(),
@@ -236,6 +238,10 @@ impl ApplicationHandler for App {
                     KeyCode::ArrowRight => self.vm.skip(1.0 / 30.0),
                     KeyCode::Escape => self.vm.select_subtitle(None),
                     KeyCode::KeyS if ctrl => self.vm.save_project(),
+                    // ── Undo / Redo Keybinds
+                    KeyCode::KeyZ if ctrl && shift => self.vm.redo(),
+                    KeyCode::KeyZ if ctrl && !shift => self.vm.undo(),
+                    KeyCode::KeyY if ctrl => self.vm.redo(),
                     _ => {}
                 }
                 gpu.window.request_redraw();

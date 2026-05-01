@@ -7,6 +7,7 @@ pub mod text_tab;
 pub mod transform_tab;
 pub mod render_tab;
 pub mod effects_tab;
+pub mod words_tab;
 pub mod widgets;
 
 use animate_tab::draw_animate;
@@ -14,6 +15,7 @@ use text_tab::draw_text_props;
 use transform_tab::draw_transform;
 use render_tab::draw_render;
 use effects_tab::draw_effects;
+use words_tab::draw_words;
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
 
@@ -22,6 +24,7 @@ pub enum InspectorTab {
     #[default]
     Transform,
     Text,
+    Words,
     Animate,
     Effects,
     Render,
@@ -59,6 +62,7 @@ pub fn draw(ctx: &Context, vm: &mut EditorViewModel, tab: &mut InspectorTab) {
                             match *tab {
                                 InspectorTab::Transform => draw_transform(ui, vm, ctx),
                                 InspectorTab::Text      => draw_text_props(ui, vm),
+                                InspectorTab::Words     => draw_words(ui, vm),
                                 InspectorTab::Animate   => draw_animate(ui, vm),
                                 InspectorTab::Effects   => draw_effects(ui, vm),
                                 _ => {}
@@ -78,16 +82,19 @@ fn draw_tabs(ui: &mut egui::Ui, tab: &mut InspectorTab) {
         .inner_margin(egui::Margin::symmetric(10.0, 0.0))
         .show(ui, |ui| {
             ui.set_min_height(28.0);
+            
             ui.horizontal(|ui| {
-                tab_btn(ui, "TRANSFORM", *tab == InspectorTab::Transform, tab, InspectorTab::Transform);
+                tab_btn(ui, "TRN", *tab == InspectorTab::Transform, tab, InspectorTab::Transform);
                 ui.add_space(2.0);
-                tab_btn(ui, "TEXT", *tab == InspectorTab::Text, tab, InspectorTab::Text);
+                tab_btn(ui, "TXT", *tab == InspectorTab::Text, tab, InspectorTab::Text);
                 ui.add_space(2.0);
-                tab_btn(ui, "ANIMATE", *tab == InspectorTab::Animate, tab, InspectorTab::Animate);
+                tab_btn(ui, "WRD", *tab == InspectorTab::Words, tab, InspectorTab::Words);
                 ui.add_space(2.0);
-                tab_btn(ui, "EFFECTS", *tab == InspectorTab::Effects, tab, InspectorTab::Effects);
+                tab_btn(ui, "ANI", *tab == InspectorTab::Animate, tab, InspectorTab::Animate);
                 ui.add_space(2.0);
-                tab_btn(ui, "RENDER", *tab == InspectorTab::Render, tab, InspectorTab::Render);
+                tab_btn(ui, "FX", *tab == InspectorTab::Effects, tab, InspectorTab::Effects);
+                ui.add_space(2.0);
+                tab_btn(ui, "OUT", *tab == InspectorTab::Render, tab, InspectorTab::Render);
             });
         });
 }
@@ -97,8 +104,7 @@ fn tab_btn(ui: &mut egui::Ui, label: &str, active: bool, tab: &mut InspectorTab,
     let resp = ui.add(egui::Label::new(egui::RichText::new(label).color(color).size(10.0).strong()).sense(egui::Sense::click()));
     if active {
         let r = resp.rect;
-        ui.painter().line_segment(
-            [egui::pos2(r.min.x, r.max.y + 1.0), egui::pos2(r.max.x, r.max.y + 1.0)],
+        ui.painter().line_segment([egui::pos2(r.min.x, r.max.y + 1.0), egui::pos2(r.max.x, r.max.y + 1.0)],
             egui::Stroke::new(2.0, ACCENT_CYAN),
         );
     }

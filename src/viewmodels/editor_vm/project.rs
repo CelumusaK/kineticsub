@@ -1,10 +1,52 @@
-// File: src/viewmodels/editor_vm/project.rs
 use super::EditorViewModel;
 use crate::models::types::{Project, RenderMode};
 use crate::services::render_service::{run_render, RenderMessage};
 use std::sync::mpsc;
 
 impl EditorViewModel {
+    // ── History (Undo / Redo) ─────────────────────────────────────────────────────
+
+    /// Marks the project state as modified. A snapshot will be automatically taken 
+    /// at the end of the frame once the user drops their pointer.
+    pub fn mark_modified(&mut self) {
+        self.pending_snapshot = true;
+    }
+
+    /// Evaluates if we should snapshot the project state into history.
+    pub fn maybe_snapshot(&mut self, is_pointer_down: bool) {
+        if self.pending_snapshot && !is_pointer_down {
+            self.snapshot();
+        }
+    }
+
+    /// Forces a state capture into the history queue
+    pub fn snapshot(&mut self) {
+        if self.history_index + 1 < self.history.len() {
+            self.history.truncate(self.history_index + 1);
+        }
+        self.history.push(self.project.clone());
+        self.history_index += 1;
+        self.pending_snapshot = false;
+    }
+
+    pub fn undo(&mut self) {
+        if self.history_index > 0 {
+            self.history_index -= 1;
+            self.project = self.history[self.history_index].clone();
+            self.update_duration();
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if self.history_index + 1 < self.history.len() {
+            self.history_index += 1;
+            self.project = self.history[self.history_index].clone();
+            self.update_duration();
+        }
+    }
+
+    // ── Save / Load ───────────────────────────────────────────────────────────────
+
     pub fn save_project(&mut self) {
         if let Some(path) = &self.filepath {
             let json = serde_json::to_string_pretty(&self.project).unwrap();
@@ -38,6 +80,10 @@ impl EditorViewModel {
                     self.selected_ids.clear();
                     self.update_duration();
                     self.sync.stop();
+                    
+                    self.history.clear();
+                    self.history.push(self.project.clone());
+                    self.history_index = 0;
                 }
             }
         }

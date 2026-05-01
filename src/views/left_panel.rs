@@ -1,5 +1,5 @@
 use egui::{Context, SidePanel};
-use crate::viewmodels::editor_vm::EditorViewModel;
+use crate::viewmodels::editor_vm::{EditorViewModel, TranscribeMode};
 use super::theme::{BG_PANEL, BORDER, TEXT_DIM, TEXT_NORM, TEXT_BRIGHT, ACCENT_CYAN, ACCENT_AMBER};
 
 pub fn draw(ctx: &Context, vm: &mut EditorViewModel) {
@@ -12,12 +12,17 @@ pub fn draw(ctx: &Context, vm: &mut EditorViewModel) {
             ..Default::default()
         })
         .show(ctx, |ui| {
-            ui.add_space(2.0);
-            draw_media_bin(ui, vm);
-            separator(ui);
-            draw_subtitle_list(ui, vm);
-            separator(ui);
-            draw_presets(ui, vm);
+            // Global scroll area for the entire left panel
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.add_space(2.0);
+                    draw_media_bin(ui, vm);
+                    separator(ui);
+                    draw_subtitle_list(ui, vm);
+                    separator(ui);
+                    draw_presets(ui, vm);
+                });
         });
 }
 
@@ -49,18 +54,24 @@ fn draw_media_bin(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
     });
 
     if vm.whisper_is_running() {
-        ui.add_space(2.0);
+        ui.add_space(4.0);
         ui.label(
             egui::RichText::new(format!("⟳  {}", vm.whisper_status))
                 .color(ACCENT_CYAN)
                 .size(10.0)
                 .monospace(),
         );
+    } else {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Transcription:").color(TEXT_DIM).size(10.5));
+            ui.radio_value(&mut vm.transcribe_mode, TranscribeMode::Phrase, "Phrase");
+            ui.radio_value(&mut vm.transcribe_mode, TranscribeMode::Word, "Word");
+        });
     }
 }
 
 fn draw_media_card(ui: &mut egui::Ui, vm: &mut EditorViewModel, index: usize) {
-    // Extract info without holding a borrow on `vm`
     let (id, name, duration, is_video_track, on_timeline) = {
         let m = &vm.project.media_files[index];
         (m.id.clone(), m.name.clone(), m.duration, m.is_video_track, m.on_timeline)
@@ -124,9 +135,9 @@ fn draw_media_card(ui: &mut egui::Ui, vm: &mut EditorViewModel, index: usize) {
             });
         });
 
-    // Write back changes to `vm` AFTER the UI closure
     if color_changed {
         vm.project.media_files[index].color = current_color;
+        vm.mark_modified();
     }
     if remove_clicked || add_clicked {
         vm.toggle_media_timeline(&id);
@@ -144,54 +155,48 @@ fn draw_subtitle_list(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
     }
 
     let mut clicked_id = None;
-    let num_rows = vm.project.subtitles.len();
-    let row_height = 24.0; 
 
-    egui::ScrollArea::vertical()
-        .id_salt("sub_list_scroll")
-        .max_height(180.0)
-        .show_rows(ui, row_height, num_rows, |ui, row_range| {
-            for i in row_range {
-                let sub = &vm.project.subtitles[i];
+    // Use standard iteration inside the top-level ScrollArea rather than a nested ScrollArea
+    for i in 0..vm.project.subtitles.len() {
+        let sub = &vm.project.subtitles[i];
 
-                let mut text_preview: String = sub.text.chars().take(22).collect();
-                if sub.text.len() > text_preview.len() { text_preview.push('…'); }
-                let time_label = format!("{:02}:{:04.1}", (sub.timeline_start / 60.0) as i32, sub.timeline_start % 60.0);
+        let mut text_preview: String = sub.text.chars().take(22).collect();
+        if sub.text.len() > text_preview.len() { text_preview.push('…'); }
+        let time_label = format!("{:02}:{:04.1}", (sub.timeline_start / 60.0) as i32, sub.timeline_start % 60.0);
 
-                let is_selected = vm.selected_ids.contains(&sub.id);
-                let is_primary  = vm.selected_id.as_deref() == Some(sub.id.as_str());
-                let has_link = sub.media_id.is_some();
+        let is_selected = vm.selected_ids.contains(&sub.id);
+        let is_primary  = vm.selected_id.as_deref() == Some(sub.id.as_str());
+        let has_link = sub.media_id.is_some();
 
-                let row_fill = if is_primary {
-                    egui::Color32::from_rgba_unmultiplied(34, 211, 238, 28)
-                } else if is_selected {
-                    egui::Color32::from_rgba_unmultiplied(34, 211, 238, 12)
-                } else {
-                    egui::Color32::TRANSPARENT
-                };
+        let row_fill = if is_primary {
+            egui::Color32::from_rgba_unmultiplied(34, 211, 238, 28)
+        } else if is_selected {
+            egui::Color32::from_rgba_unmultiplied(34, 211, 238, 12)
+        } else {
+            egui::Color32::TRANSPARENT
+        };
 
-                let resp = egui::Frame::none()
-                    .fill(row_fill)
-                    .inner_margin(egui::Margin::symmetric(8.0, 3.0))
-                    .rounding(egui::Rounding::same(3.0))
-                    .show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(&time_label).color(TEXT_DIM).size(10.5).monospace());
-                            ui.add_space(2.0);
-                            if has_link { ui.label(egui::RichText::new("⛓").size(9.0).color(ACCENT_AMBER)); }
-                            ui.add_space(2.0);
-                            let label_color = if is_primary { ACCENT_CYAN } else { TEXT_NORM };
-                            ui.label(egui::RichText::new(&text_preview).color(label_color).size(11.5));
-                        });
-                    })
-                    .response;
+        let resp = egui::Frame::none()
+            .fill(row_fill)
+            .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+            .rounding(egui::Rounding::same(3.0))
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&time_label).color(TEXT_DIM).size(10.5).monospace());
+                    ui.add_space(2.0);
+                    if has_link { ui.label(egui::RichText::new("⛓").size(9.0).color(ACCENT_AMBER)); }
+                    ui.add_space(2.0);
+                    let label_color = if is_primary { ACCENT_CYAN } else { TEXT_NORM };
+                    ui.label(egui::RichText::new(&text_preview).color(label_color).size(11.5));
+                });
+            })
+            .response;
 
-                if resp.interact(egui::Sense::click()).clicked() {
-                    clicked_id = Some(sub.id.clone());
-                }
-            }
-        });
+        if resp.interact(egui::Sense::click()).clicked() {
+            clicked_id = Some(sub.id.clone());
+        }
+    }
 
     if let Some(id) = clicked_id {
         vm.selected_id = Some(id.clone());
@@ -237,6 +242,7 @@ fn apply_style_preset(vm: &mut EditorViewModel, preset: &str) {
             }
         }
     }
+    vm.snapshot();
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

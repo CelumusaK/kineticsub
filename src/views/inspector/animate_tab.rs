@@ -1,13 +1,9 @@
 // File: src/views/inspector/animate_tab.rs
 use egui;
 use crate::viewmodels::editor_vm::{EditorViewModel, KeyframeMode};
-use crate::models::types::{AnimationPreset, Easing};
+use crate::models::types::{AnimationPreset, Easing, LoopMode};
 use crate::views::theme::{BG_HOVER, BORDER, TEXT_DIM, TEXT_NORM, TEXT_BRIGHT, ACCENT_CYAN, ACCENT_AMBER, BG_BASE};
 use super::widgets::*;
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ANIMATE TAB
-// ═══════════════════════════════════════════════════════════════════════════════
 
 pub fn draw_animate(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
     let current_time = vm.current_time();
@@ -71,7 +67,80 @@ pub fn draw_animate(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
     ui.add_space(8.0);
     ui.add(egui::Separator::default());
     ui.add_space(4.0);
+    
+    // ── LOOPING KEYFRAMES ─────────────────────────────────────────────────────────
+    section_label(ui, "LOOP BEHAVIOR");
+    let mut loop_mode = vm.selected_subtitle().map(|s| s.loop_mode.clone()).unwrap_or_default();
+    
+    ui.horizontal(|ui| {
+        let mut loop_changed = false;
+        egui::ComboBox::from_id_salt("loop_mode_cmb")
+            .selected_text(format!("{:?}", loop_mode))
+            .show_ui(ui, |ui| {
+                if ui.selectable_value(&mut loop_mode, LoopMode::None, "None").changed() { loop_changed = true; }
+                if ui.selectable_value(&mut loop_mode, LoopMode::Loop, "Loop (Repeat)").changed() { loop_changed = true; }
+                if ui.selectable_value(&mut loop_mode, LoopMode::PingPong, "Ping-Pong (Reverse)").changed() { loop_changed = true; }
+            });
+            
+        if loop_changed {
+            let ids: Vec<String> = vm.selected_ids.iter().cloned().collect();
+            for sub in vm.project.subtitles.iter_mut() {
+                if ids.contains(&sub.id) { sub.loop_mode = loop_mode.clone(); }
+            }
+            vm.mark_modified();
+        }
+    });
 
+    ui.add_space(8.0);
+    ui.add(egui::Separator::default());
+    ui.add_space(4.0);
+
+    // ── WORD ANIMATION (KARAOKE) ──────────────────────────────────────────────────
+    section_label(ui, "WORD ANIMATION (KARAOKE)");
+    ui.label(egui::RichText::new("Requires transcribed words.").color(TEXT_DIM).size(10.0));
+    
+    let mut wa = vm.selected_subtitle().map(|s| s.word_animation.clone()).unwrap_or_default();
+    let mut wa_changed = false;
+
+    egui::ComboBox::from_id_salt("wa_combo")
+        .selected_text(match wa {
+            crate::models::types::WordAnimation::None => "None",
+            crate::models::types::WordAnimation::KaraokeHighlight{..} => "Karaoke Highlight",
+            crate::models::types::WordAnimation::KaraokePop{..} => "Karaoke Pop",
+            crate::models::types::WordAnimation::CascadeFade => "Cascade Fade",
+        })
+        .show_ui(ui, |ui| {
+            if ui.selectable_value(&mut wa, crate::models::types::WordAnimation::None, "None").changed() { wa_changed = true; }
+            if ui.selectable_value(&mut wa, crate::models::types::WordAnimation::KaraokeHighlight{ color:[1.0, 0.8, 0.0, 1.0] }, "Karaoke Highlight").changed() { wa_changed = true; }
+            if ui.selectable_value(&mut wa, crate::models::types::WordAnimation::KaraokePop{ scale: 1.2 }, "Karaoke Pop").changed() { wa_changed = true; }
+            if ui.selectable_value(&mut wa, crate::models::types::WordAnimation::CascadeFade, "Cascade Fade").changed() { wa_changed = true; }
+        });
+
+    match &mut wa {
+        crate::models::types::WordAnimation::KaraokeHighlight { color } => {
+            if ui.color_edit_button_rgba_unmultiplied(color).changed() { wa_changed = true; }
+        }
+        crate::models::types::WordAnimation::KaraokePop { scale } => {
+            if ui.add(egui::Slider::new(scale, 1.0..=2.0).text("Pop Scale")).changed() { wa_changed = true; }
+        }
+        _ => {}
+    }
+
+    if wa_changed {
+        let ids: Vec<String> = vm.selected_ids.iter().cloned().collect();
+        for sub in vm.project.subtitles.iter_mut() {
+            if ids.contains(&sub.id) {
+                sub.word_animation = wa.clone();
+            }
+        }
+        vm.mark_modified();
+    }
+
+    ui.add_space(8.0);
+    ui.add(egui::Separator::default());
+    ui.add_space(4.0);
+
+    // ── ANIMATION PRESETS ─────────────────────────────────────────────────────────
     section_label(ui, "ANIMATION PRESETS");
     ui.label(egui::RichText::new("Replaces existing keyframes").color(TEXT_DIM).size(10.0));
     ui.add_space(4.0);
@@ -99,6 +168,7 @@ pub fn draw_animate(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
                 sub.keyframes = kfs;
             }
         }
+        vm.snapshot();
     }
 
     ui.add_space(8.0);
@@ -200,6 +270,82 @@ pub fn draw_animate(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
                                 });
                         });
 
+                        // Visual Bezier Editor when Custom is selected
+                        if let Easing::Custom(mut handles) = ke {
+                            ui.add_space(6.0);
+                            ui.label(egui::RichText::new("Curve Editor").color(TEXT_DIM).size(10.0));
+                            let mut bezier_changed = false;
+                            
+                            ui.horizontal(|ui| {
+                                ui.add_space(20.0); // Indent
+                                let (rect, _resp) = ui.allocate_exact_size(egui::Vec2::splat(120.0), egui::Sense::hover());
+                                ui.painter().rect_filled(rect, 4.0, BG_BASE);
+                                ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.0, BORDER));
+                                
+                                let p0 = rect.left_bottom();
+                                let p3 = rect.right_top();
+                                
+                                let to_pos = |x: f32, y: f32| -> egui::Pos2 {
+                                    egui::pos2(rect.left() + x * rect.width(), rect.bottom() - y * rect.height())
+                                };
+                                let from_pos = |p: egui::Pos2| -> (f32, f32) {
+                                    ((p.x - rect.left()) / rect.width(), (rect.bottom() - p.y) / rect.height())
+                                };
+
+                                let mut p1_pos = to_pos(handles[0], handles[1]);
+                                let mut p2_pos = to_pos(handles[2], handles[3]);
+
+                                let p1_rect = egui::Rect::from_center_size(p1_pos, egui::Vec2::splat(16.0));
+                                let p2_rect = egui::Rect::from_center_size(p2_pos, egui::Vec2::splat(16.0));
+
+                                let p1_resp = ui.interact(p1_rect, ui.id().with(format!("p1_{}", kf_id)), egui::Sense::drag());
+                                if p1_resp.dragged() {
+                                    p1_pos += p1_resp.drag_delta();
+                                    let (hx, hy) = from_pos(p1_pos);
+                                    handles[0] = hx.clamp(0.0, 1.0);
+                                    handles[1] = hy;
+                                    bezier_changed = true;
+                                }
+
+                                let p2_resp = ui.interact(p2_rect, ui.id().with(format!("p2_{}", kf_id)), egui::Sense::drag());
+                                if p2_resp.dragged() {
+                                    p2_pos += p2_resp.drag_delta();
+                                    let (hx, hy) = from_pos(p2_pos);
+                                    handles[2] = hx.clamp(0.0, 1.0);
+                                    handles[3] = hy;
+                                    bezier_changed = true;
+                                }
+
+                                // Draw Handle Lines
+                                ui.painter().line_segment([p0, p1_pos], egui::Stroke::new(1.5, TEXT_DIM));
+                                ui.painter().line_segment([p3, p2_pos], egui::Stroke::new(1.5, TEXT_DIM));
+                                
+                                // Draw Curve
+                                let steps = 30;
+                                let mut points = vec![];
+                                for i in 0..=steps {
+                                    let t = i as f32 / steps as f32;
+                                    let u = 1.0 - t;
+                                    let x = 3.0*u*u*t*handles[0] + 3.0*u*t*t*handles[2] + t*t*t;
+                                    let y = 3.0*u*u*t*handles[1] + 3.0*u*t*t*handles[3] + t*t*t;
+                                    points.push(to_pos(x, y));
+                                }
+                                ui.painter().add(egui::Shape::line(points, egui::Stroke::new(2.5, ACCENT_CYAN)));
+
+                                // Draw Handle Dots
+                                ui.painter().circle_filled(p1_pos, 5.0, ACCENT_AMBER);
+                                ui.painter().circle_stroke(p1_pos, 6.0, egui::Stroke::new(1.0, BORDER));
+                                
+                                ui.painter().circle_filled(p2_pos, 5.0, ACCENT_AMBER);
+                                ui.painter().circle_stroke(p2_pos, 6.0, egui::Stroke::new(1.0, BORDER));
+                            });
+
+                            if bezier_changed {
+                                ke = Easing::Custom(handles);
+                                kf_changed = true;
+                            }
+                        }
+
                         if kf_changed {
                             if let Some(sub) = vm.selected_subtitle_mut() {
                                 if let Some(kf) = sub.keyframes.iter_mut()
@@ -209,6 +355,7 @@ pub fn draw_animate(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
                                     kf.opacity = ko; kf.rotation = kr; kf.easing = ke;
                                 }
                             }
+                            vm.mark_modified();
                         }
                     }
                 }
@@ -221,6 +368,7 @@ pub fn draw_animate(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
         if let Some(sub) = vm.selected_subtitle_mut() {
             sub.keyframes.retain(|k| k.id != id);
         }
+        vm.snapshot();
     }
 
     ui.add_space(8.0);
@@ -258,7 +406,7 @@ fn draw_animation_graph(ui: &mut egui::Ui, vm: &mut EditorViewModel, local_time:
         // Draw interpolation curves
         for step in 0..=steps {
             let t = dur * step as f64 / steps as f64;
-            let state = sub.get_interpolated_state(sub.timeline_start + t);
+            let state = sub.get_interpolated_state(sub.timeline_start + t, &vm.project.subtitles, 0);
             let x   = rect.min.x + (t / dur) as f32 * rect.width();
             
             let o_y = rect.max.y - state.opacity * rect.height();

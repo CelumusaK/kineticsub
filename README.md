@@ -10,24 +10,35 @@ A High-Performance, GPU-Accelerated Kinetic Typography & Subtitle Editor
 
 <br>
 
-> **💡 Project Notice:**  
-> KineticSub-RS is an exploratory side project developed with the assistance of AI. It was built to experiment with native GUI rendering, audio processing, and local AI transcription in Rust.
+> **⚠️ Project Notice & Warning:**  
+> **This is a very early version made within a span of just 2 days. It is currently buggy, highly experimental, and honestly not that good yet. Expect crashes, unpolished UX, and weird behavior!**
 >
-> It focuses on fast subtitle generation, kinetic text animation, and typography previewing. With recent updates, it now utilizes **FFMPEG** to bake your animations into final MP4 video files or transparent PNG sequences!
+> KineticSub-RS is an exploratory side project developed with the assistance of AI. It was built to experiment with native GUI rendering, audio processing, and local AI transcription in Rust. It utilizes **FFMPEG** to bake your animations into final MP4 video files or transparent PNG sequences.
 
 ## ⚡ Overview
 
 KineticSub-RS is a desktop application designed to bring advanced, non-linear editing paradigms to subtitle creation and kinetic typography. Built from the ground up in Rust, it leverages `wgpu` for hardware-accelerated rendering and `egui` for a highly responsive, immediate-mode user interface.
 
-Whether you are auto-transcribing audio using local AI models, hand-crafting intricate text animations with custom easing curves, or exporting transparent text plates for DaVinci Resolve/Premiere, KineticSub-RS provides a fluid, real-time workspace.
+Whether you are auto-transcribing audio using local AI models, hand-crafting intricate text animations with custom easing curves, or exporting transparent text plates for DaVinci Resolve/Premiere, KineticSub-RS provides a fluid workspace.
 
 ## ✨ Key Features
 
 - **🤖 Local AI Transcription:** Integrated `whisper-rs` allows for automatic, on-device audio transcription. Just drop in an audio file, and the app automatically generates time-aligned subtitle blocks.
 - **🎥 FFMPEG Render Engine:** Export your finished timeline directly to a full `.mp4` video (with muxed audio) or render a `.zip` archive of **transparent PNG image sequences** to overlay in your favorite NLE.
 - **⏱️ Non-Linear Timeline Editor:** A fully featured, zoomable, and scrollable timeline track system. Includes block dragging, box selection, multi-clip shifting, and playhead scrubbing.
-- **🎢 Kinetic Keyframing System:** Animate text dynamically. Add keyframes to text scale, rotation, opacity, and X/Y positioning. Interpolate smoothly using a robust set of easing functions (Bounce, Elastic, Back, Ease In/Out).
-- **🎨 Advanced Typography & Effects:** Customize text down to the pixel. Features include drop shadows with variable blur, text strokes, dynamic gradient fills, bounding boxes, and dynamic **Motion Blur**.
+- **🎢 Kinetic Keyframing & Physics:** 
+  - Animate text dynamically with a **Visual Bezier Graph Editor** for custom easing curves.
+  - Apply **Physics & Dynamics** (gravity and floor bouncing).
+  - Use **Code-Driven Expressions** (e.g., `wiggle`, `time * 100`).
+  - Link text blocks together using **Parenting & Null Tracking**.
+  - Ping-pong and infinite keyframe **Looping**.
+- **🎨 Advanced Typography & Pro Effects:** Customize text down to the pixel. Features include:
+  - **Glow & Bloom Engine** for cinematic neon lighting.
+  - **Multiple Strokes/Outlines** per text element.
+  - **Advanced Glitch & Distortion** (RGB split, CRT scanlines).
+  - **Text Warping / Deformers** (Arcs, Waves, Bulges, Flags).
+  - **Track Mattes & Blending Modes** (Multiply, Screen, Overlay).
+  - Dynamic **Motion Blur** and gradient fills.
 - **🔊 Audio Playback Engine:** Powered by `rodio` and `symphonia`, ensuring frame-accurate audio syncing as you scrub the timeline.
 - **💾 Project Serialization:** Save and load your workspaces seamlessly using the custom `.ksub` JSON project format.
 
@@ -70,7 +81,7 @@ cargo run --release
 
     Animate: Select a subtitle block. In the right-hand Inspector panel, switch to the Animate tab. Click ⏺ Record to auto-keyframe your changes as you scrub the timeline, or use the pre-built Animation Presets (e.g., Bounce In, Typewriter, Zoom Out).
 
-    Add Motion Blur: Go to the Effects tab to enable dynamic trailing motion blur for fast-moving text.
+    Add FX: Go to the Effects or Text tabs to add motion blur, text warping, physics, bloom, or multiple strokes.
 
     Export: Switch to the Render tab in the Inspector. Choose your resolution/FPS, select Video or Image Sequence, and click ▶ EXPORT PROJECT.
 
@@ -78,11 +89,13 @@ cargo run --release
 
 🚧 Roadmap & Limitations
 
-As a passion project, KineticSub-RS is a work in progress. Current limitations include:
+As a very early 2-day hackathon passion project, KineticSub-RS is a work in progress. Current limitations include:
 
     Canvas Video Playback: The real-time canvas currently only previews text and solid background colors (or a transparency checkerboard). Real-time video file decoding/playback on the canvas is not yet supported.
 
     Memory Optimization: Heavy audio files may take a moment to decode into PCM data for Whisper.
+
+    Stability: Undo/Redo history tracking might miss certain edge cases, and extreme physics/expressions can cause erratic visual behavior.
 
 📄 License
 
