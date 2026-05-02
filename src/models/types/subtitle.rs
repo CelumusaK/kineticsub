@@ -193,6 +193,7 @@ pub struct Subtitle {
     #[serde(default = "def_path_scale")] pub path_scale_x: f32,
     #[serde(default = "def_path_scale")] pub path_scale_y: f32,
     #[serde(default)] pub path_orient: bool,
+    #[serde(default)] pub path_align_words: bool,
     #[serde(default)] pub custom_path: Vec<PathNode>,
     #[serde(default)] pub path_progress: f32,
 
@@ -288,6 +289,7 @@ impl Subtitle {
             path_type: PathType::None,
             path_scale_x: 100.0, path_scale_y: 100.0,
             path_orient: false,
+            path_align_words: false,
             custom_path: Vec::new(),
             path_progress: 0.0,
             mask_type: MaskType::None,

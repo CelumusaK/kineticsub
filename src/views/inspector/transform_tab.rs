@@ -33,17 +33,16 @@ pub fn draw_transform(ui: &mut egui::Ui, vm: &mut EditorViewModel, _ctx: &Contex
     let mut align_x: Option<f32> = None;
     let mut align_y: Option<f32> = None;
 
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.add_space(2.0);
         if align_btn(ui, "⬛◻◻", "Align Left Edge").clicked()  { align_x = Some(-800.0); }
         if align_btn(ui, "◻⬛◻", "Center H").clicked()          { align_x = Some(0.0); }
         if align_btn(ui, "◻◻⬛", "Align Right Edge").clicked()  { align_x = Some(800.0); }
-        ui.add_space(6.0);
         if align_btn(ui, "▀▁▁", "Align Top Edge").clicked()    { align_y = Some(-400.0); }
         if align_btn(ui, "▁▀▁", "Center V").clicked()          { align_y = Some(0.0); }
         if align_btn(ui, "▁▁▀", "Align Bottom Edge").clicked() { align_y = Some(400.0); }
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.add_space(2.0);
         if align_btn(ui, "↙", "Lower Left").clicked()  { align_x = Some(-700.0); align_y = Some(360.0); }
         if align_btn(ui, "↓", "Bot Center").clicked()  { align_x = Some(0.0);    align_y = Some(360.0); }
@@ -68,13 +67,13 @@ pub fn draw_transform(ui: &mut egui::Ui, vm: &mut EditorViewModel, _ctx: &Contex
     // ── Hoist all values ──────────────────────────────────────────────────────
     let (mut px, mut py, mut pscale, mut prot, mut popac, mut pstart, mut pend,
          mut pskewx, mut pskewy, mut pyaw, mut ppitch,
-         mut path_type, mut ps_x, mut ps_y, mut porient, mut pprog,
+         mut path_type, mut ps_x, mut ps_y, mut porient, mut pprog, mut palign_words,
          mut parent_id, mut exprs, mut physics) = {
         match vm.selected_subtitle() {
             Some(s) => (
                 s.x, s.y, s.scale, s.rotation, s.opacity, s.timeline_start, s.timeline_end,
                 s.skew_x, s.skew_y, s.yaw, s.pitch,
-                s.path_type.clone(), s.path_scale_x, s.path_scale_y, s.path_orient, s.path_progress,
+                s.path_type.clone(), s.path_scale_x, s.path_scale_y, s.path_orient, s.path_progress, s.path_align_words,
                 s.parent_id.clone(), s.expressions.clone(), s.physics.clone()
             ),
             None    => return,
@@ -119,12 +118,16 @@ pub fn draw_transform(ui: &mut egui::Ui, vm: &mut EditorViewModel, _ctx: &Contex
     {
         let (mut c1, mut c2) = (false, false);
         two_col_row(ui, |ui| {
-            ui.label(egui::RichText::new("X").color(TEXT_DIM).size(10.5));
-            circle_dot(ui, dot_color);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("X").color(TEXT_DIM).size(10.5));
+                circle_dot(ui, dot_color);
+            });
             if ui.add(egui::DragValue::new(&mut px).speed(0.5).suffix(" px").range(-1920.0..=1920.0)).changed() { c1 = true; }
         }, |ui| {
-            ui.label(egui::RichText::new("Y").color(TEXT_DIM).size(10.5));
-            circle_dot(ui, dot_color);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Y").color(TEXT_DIM).size(10.5));
+                circle_dot(ui, dot_color);
+            });
             if ui.add(egui::DragValue::new(&mut py).speed(0.5).suffix(" px").range(-1080.0..=1080.0)).changed() { c2 = true; }
         });
         pos_changed |= c1 | c2;
@@ -137,12 +140,16 @@ pub fn draw_transform(ui: &mut egui::Ui, vm: &mut EditorViewModel, _ctx: &Contex
     {
         let (mut c1, mut c2) = (false, false);
         two_col_row(ui, |ui| {
-            ui.label(egui::RichText::new("Scale").color(TEXT_DIM).size(10.5));
-            circle_dot(ui, dot_color);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Scale").color(TEXT_DIM).size(10.5));
+                circle_dot(ui, dot_color);
+            });
             if ui.add(egui::DragValue::new(&mut pscale).speed(0.005).range(0.0..=10.0)).changed() { c1 = true; }
         }, |ui| {
-            ui.label(egui::RichText::new("Rot°").color(TEXT_DIM).size(10.5));
-            circle_dot(ui, dot_color);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Rot°").color(TEXT_DIM).size(10.5));
+                circle_dot(ui, dot_color);
+            });
             if ui.add(egui::DragValue::new(&mut prot).speed(0.5).suffix("°").range(-360.0..=360.0)).changed() { c2 = true; }
         });
         trs_changed |= c1 | c2;
@@ -216,12 +223,16 @@ pub fn draw_transform(ui: &mut egui::Ui, vm: &mut EditorViewModel, _ctx: &Contex
     {
         let (mut c1, mut c2) = (false, false);
         two_col_row(ui, |ui| {
-            ui.label(egui::RichText::new("Yaw° (Y)").color(TEXT_DIM).size(10.5));
-            circle_dot(ui, dot_color);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Yaw° (Y)").color(TEXT_DIM).size(10.5));
+                circle_dot(ui, dot_color);
+            });
             if ui.add(egui::DragValue::new(&mut pyaw).speed(0.5).suffix("°")).changed() { c1 = true; }
         }, |ui| {
-            ui.label(egui::RichText::new("Pitch° (X)").color(TEXT_DIM).size(10.5));
-            circle_dot(ui, dot_color);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Pitch° (X)").color(TEXT_DIM).size(10.5));
+                circle_dot(ui, dot_color);
+            });
             if ui.add(egui::DragValue::new(&mut ppitch).speed(0.5).suffix("°")).changed() { c2 = true; }
         });
         trs_changed |= c1 | c2;
@@ -229,12 +240,16 @@ pub fn draw_transform(ui: &mut egui::Ui, vm: &mut EditorViewModel, _ctx: &Contex
     {
         let (mut c1, mut c2) = (false, false);
         two_col_row(ui, |ui| {
-            ui.label(egui::RichText::new("Skew X").color(TEXT_DIM).size(10.5));
-            circle_dot(ui, dot_color);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Skew X").color(TEXT_DIM).size(10.5));
+                circle_dot(ui, dot_color);
+            });
             if ui.add(egui::DragValue::new(&mut pskewx).speed(0.01)).changed() { c1 = true; }
         }, |ui| {
-            ui.label(egui::RichText::new("Skew Y").color(TEXT_DIM).size(10.5));
-            circle_dot(ui, dot_color);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Skew Y").color(TEXT_DIM).size(10.5));
+                circle_dot(ui, dot_color);
+            });
             if ui.add(egui::DragValue::new(&mut pskewy).speed(0.01)).changed() { c2 = true; }
         });
         trs_changed |= c1 | c2;
@@ -268,6 +283,7 @@ pub fn draw_transform(ui: &mut egui::Ui, vm: &mut EditorViewModel, _ctx: &Contex
         path_changed |= c1 | c2;
 
         if ui.checkbox(&mut porient, "Orient to Path (Fix Rotation)").changed() { path_changed = true; }
+        if ui.checkbox(&mut palign_words, "Word-by-Word Alignment").changed() { path_changed = true; }
 
         prop_row(ui, "Progress", |ui| {
             circle_dot(ui, dot_color);
@@ -305,7 +321,7 @@ pub fn draw_transform(ui: &mut egui::Ui, vm: &mut EditorViewModel, _ctx: &Contex
                 if pos_changed   { sub.x = px; sub.y = py; }
                 if trs_changed   { sub.scale = pscale; sub.rotation = prot; sub.skew_x = pskewx; sub.skew_y = pskewy; sub.yaw = pyaw; sub.pitch = ppitch; }
                 if opac_changed  { sub.opacity = popac; }
-                if path_changed  { sub.path_type = path_type.clone(); sub.path_scale_x = ps_x; sub.path_scale_y = ps_y; sub.path_orient = porient; sub.path_progress = pprog; }
+                if path_changed  { sub.path_type = path_type.clone(); sub.path_scale_x = ps_x; sub.path_scale_y = ps_y; sub.path_orient = porient; sub.path_progress = pprog; sub.path_align_words = palign_words; }
                 if start_changed { sub.timeline_start = pstart; }
                 if end_changed   { sub.timeline_end = pend; }
                 if parent_changed { sub.parent_id = parent_id.clone(); }

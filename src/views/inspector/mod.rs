@@ -1,3 +1,5 @@
+// File: src/views/inspector/mod.rs
+// ─────────────────────────────────────────────────────────────────────────────
 use egui::{Context, SidePanel};
 use crate::viewmodels::editor_vm::EditorViewModel;
 use crate::views::theme::{BG_PANEL, BG_BASE, BORDER, TEXT_DIM, ACCENT_CYAN};
@@ -34,8 +36,9 @@ pub enum InspectorTab {
 
 pub fn draw(ctx: &Context, vm: &mut EditorViewModel, tab: &mut InspectorTab) {
     SidePanel::right("inspector_panel")
-        .exact_width(290.0)
-        .resizable(false)
+        .default_width(320.0)
+        .width_range(280.0..=500.0)
+        .resizable(true)
         .frame(egui::Frame {
             fill: BG_PANEL,
             stroke: egui::Stroke::new(1.0, BORDER),
