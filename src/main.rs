@@ -41,7 +41,8 @@ impl GpuContext {
                     Window::default_attributes()
                         .with_title("KineticSub-RS")
                         .with_inner_size(PhysicalSize::new(1280u32, 720u32))
-                        .with_min_inner_size(PhysicalSize::new(900u32, 600u32)),
+                        .with_min_inner_size(PhysicalSize::new(900u32, 600u32))
+                        .with_maximized(true),
                 )
                 .expect("Failed to create window"),
         );
@@ -85,8 +86,8 @@ impl GpuContext {
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format,
-            width: size.width,
-            height: size.height,
+            width: size.width.max(1),
+            height: size.height.max(1),
             present_mode: PresentMode::AutoNoVsync,
             alpha_mode: CompositeAlphaMode::Auto,
             view_formats: vec![],
@@ -121,6 +122,8 @@ impl GpuContext {
     fn render(&mut self, vm: &mut EditorViewModel, inspector_tab: &mut InspectorTab) {
         vm.poll_whisper();
         vm.poll_render(); 
+        vm.poll_model_download();
+        vm.poll_preview_extraction();
         vm.tick();
 
         let output = match self.surface.get_current_texture() {
@@ -141,8 +144,9 @@ impl GpuContext {
             views::left_panel::draw(ctx, vm);
             views::inspector::draw(ctx, vm, inspector_tab);
             views::canvas::draw(ctx, vm);
+            views::settings::draw(ctx, vm);
+            views::export_modal::draw(ctx, vm);
 
-            // ── Auto-Commit History Snapshots when drag ends
             let pointer_down = ctx.input(|i| i.pointer.any_down());
             vm.maybe_snapshot(pointer_down);
         });
@@ -193,7 +197,7 @@ impl GpuContext {
             self.egui_renderer.free_texture(id);
         }
 
-        if vm.is_playing() || vm.whisper_is_running() || vm.show_fps {
+        if vm.is_playing() || vm.whisper_is_running() || vm.is_downloading_model() || vm.show_fps || vm.is_rendering {
             self.window.request_redraw();
         }
     }
@@ -215,6 +219,11 @@ impl ApplicationHandler for App {
         }
 
         match event {
+            WindowEvent::DroppedFile(path) => {
+                self.vm.import_media(Some(path));
+                gpu.window.request_redraw();
+            }
+
             WindowEvent::CloseRequested => event_loop.exit(),
 
             WindowEvent::Resized(size) => {
@@ -238,10 +247,11 @@ impl ApplicationHandler for App {
                     KeyCode::ArrowRight => self.vm.skip(1.0 / 30.0),
                     KeyCode::Escape => self.vm.select_subtitle(None),
                     KeyCode::KeyS if ctrl => self.vm.save_project(),
-                    // ── Undo / Redo Keybinds
                     KeyCode::KeyZ if ctrl && shift => self.vm.redo(),
                     KeyCode::KeyZ if ctrl && !shift => self.vm.undo(),
                     KeyCode::KeyY if ctrl => self.vm.redo(),
+                    KeyCode::KeyK => self.vm.split_at_playhead(),
+                    KeyCode::Delete | KeyCode::Backspace => self.vm.delete_selected(),
                     _ => {}
                 }
                 gpu.window.request_redraw();
@@ -249,7 +259,7 @@ impl ApplicationHandler for App {
 
             WindowEvent::RedrawRequested => {
                 gpu.render(&mut self.vm, &mut self.inspector_tab);
-                if self.vm.is_playing() || self.vm.whisper_is_running() || self.vm.show_fps {
+                if self.vm.is_playing() || self.vm.whisper_is_running() || self.vm.is_downloading_model() || self.vm.show_fps || self.vm.is_rendering {
                     gpu.window.request_redraw();
                 }
             }
@@ -260,7 +270,7 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(gpu) = &self.gpu {
-            if self.vm.is_playing() || self.vm.whisper_is_running() || self.vm.show_fps {
+            if self.vm.is_playing() || self.vm.whisper_is_running() || self.vm.is_downloading_model() || self.vm.show_fps || self.vm.is_rendering {
                 gpu.window.request_redraw();
             }
         }

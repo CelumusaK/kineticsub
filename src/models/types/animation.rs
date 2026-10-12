@@ -1,6 +1,16 @@
 use serde::{Deserialize, Serialize};
 use super::subtitle::Subtitle;
 
+// ── New Mechanics ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub enum LoopMode {
+    #[default]
+    None,
+    Loop,
+    PingPong,
+}
+
 // ── Easing ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -146,6 +156,88 @@ pub struct InterpolatedState {
     pub x: f32, pub y: f32, pub scale: f32, pub rotation: f32, pub opacity: f32,
     pub skew_x: f32, pub skew_y: f32, pub yaw: f32, pub pitch: f32, pub path_progress: f32,
     pub mask_center: [f32; 2], pub mask_size: [f32; 2], pub mask_rotation: f32, pub mask_feather: f32,
+}
+
+// ── Unified Generic Interpolator ──────────────────────────────────────────────
+
+pub fn interpolate_keyframes(
+    current_time: f64,
+    start_time: f64,
+    keyframes: &[Keyframe],
+    loop_mode: &LoopMode,
+    mut base: InterpolatedState,
+) -> InterpolatedState {
+    let local_time = current_time - start_time;
+    let mut eval_time = local_time;
+
+    if !keyframes.is_empty() {
+        let mut sorted = keyframes.to_vec();
+        sorted.sort_by(|a, b| a.time_offset.partial_cmp(&b.time_offset).unwrap());
+        
+        let first_t = sorted.first().unwrap().time_offset;
+        let last_t = sorted.last().unwrap().time_offset;
+        let kf_dur = last_t - first_t;
+
+        if kf_dur > 0.0 && local_time > last_t {
+            match loop_mode {
+                LoopMode::None => eval_time = last_t,
+                LoopMode::Loop => eval_time = first_t + ((local_time - first_t) % kf_dur),
+                LoopMode::PingPong => {
+                    let cycle = ((local_time - first_t) / kf_dur).floor() as i32;
+                    let rem = (local_time - first_t) % kf_dur;
+                    if cycle % 2 == 0 { eval_time = first_t + rem; }
+                    else { eval_time = last_t - rem; }
+                }
+            }
+        } else if local_time < first_t {
+            eval_time = first_t;
+        }
+
+        let mut applied_kf = false;
+        for i in 0..sorted.len() - 1 {
+            let k1 = &sorted[i];
+            let k2 = &sorted[i + 1];
+            if eval_time >= k1.time_offset && eval_time <= k2.time_offset {
+                let dur = k2.time_offset - k1.time_offset;
+                let raw = if dur > 0.0 { (eval_time - k1.time_offset) / dur } else { 1.0 };
+                let e = apply_ease(raw, &k2.easing) as f32;
+                
+                base.x = k1.x + (k2.x - k1.x) * e;
+                base.y = k1.y + (k2.y - k1.y) * e;
+                base.scale = k1.scale + (k2.scale - k1.scale) * e;
+                base.rotation = k1.rotation + (k2.rotation - k1.rotation) * e;
+                base.opacity = k1.opacity + (k2.opacity - k1.opacity) * e;
+                base.skew_x = k1.skew_x + (k2.skew_x - k1.skew_x) * e;
+                base.skew_y = k1.skew_y + (k2.skew_y - k1.skew_y) * e;
+                base.yaw = k1.yaw + (k2.yaw - k1.yaw) * e;
+                base.pitch = k1.pitch + (k2.pitch - k1.pitch) * e;
+                base.path_progress = k1.path_progress + (k2.path_progress - k1.path_progress) * e;
+                base.mask_center = [
+                    k1.mask_center[0] + (k2.mask_center[0] - k1.mask_center[0]) * e,
+                    k1.mask_center[1] + (k2.mask_center[1] - k1.mask_center[1]) * e,
+                ];
+                base.mask_size = [
+                    k1.mask_size[0] + (k2.mask_size[0] - k1.mask_size[0]) * e,
+                    k1.mask_size[1] + (k2.mask_size[1] - k1.mask_size[1]) * e,
+                ];
+                base.mask_rotation = k1.mask_rotation + (k2.mask_rotation - k1.mask_rotation) * e;
+                base.mask_feather = k1.mask_feather + (k2.mask_feather - k1.mask_feather) * e;
+                
+                applied_kf = true;
+                break;
+            }
+        }
+        if !applied_kf {
+            if eval_time <= first_t {
+                let k = sorted.first().unwrap();
+                base.x = k.x; base.y = k.y; base.scale = k.scale; base.rotation = k.rotation; base.opacity = k.opacity;
+            } else if eval_time >= last_t {
+                let k = sorted.last().unwrap();
+                base.x = k.x; base.y = k.y; base.scale = k.scale; base.rotation = k.rotation; base.opacity = k.opacity;
+            }
+        }
+    }
+    base
 }
 
 // ── Easing functions ──────────────────────────────────────────────────────────

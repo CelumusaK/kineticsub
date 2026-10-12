@@ -34,7 +34,7 @@ pub fn draw_words(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
 
             let resp = ui.add(egui::Button::new(
                 egui::RichText::new(&word.text).color(text_col).size(11.0)
-            ).fill(bg_col).stroke(egui::Stroke::new(1.0, if is_selected { ACCENT_CYAN } else { BORDER })));
+            ).fill(bg_col).stroke(egui::Stroke::new(1.0_f32, if is_selected { ACCENT_CYAN } else { BORDER })));
 
             if resp.clicked() {
                 selected_idx = Some(i);
@@ -60,7 +60,7 @@ pub fn draw_words(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
                 let mut has_color = word.custom_color.is_some();
                 if ui.checkbox(&mut has_color, "Enable").changed() {
                     if has_color {
-                        word.custom_color = Some([1.0, 0.8, 0.0, 1.0]); // Default yellow
+                        word.custom_color = Some([1.0, 0.8, 0.0, 1.0]); 
                     } else {
                         word.custom_color = None;
                     }

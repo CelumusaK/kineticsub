@@ -48,8 +48,6 @@ pub fn draw(ctx: &Context, canvas_painter: &egui::Painter, preview_rect: Rect, s
             let pitch = state.pitch.to_radians();
             let yaw = state.yaw.to_radians();
 
-            // apply_transform: takes a local offset (dx, dy) from the text center
-            // and applies deform + 3D + rotation to produce a screen position.
             let apply_transform = |mut dx: f32, mut dy: f32| -> Pos2 {
                 match text_deform {
                     TextDeform::Wave => {
@@ -84,7 +82,6 @@ pub fn draw(ctx: &Context, canvas_painter: &egui::Painter, preview_rect: Rect, s
                 Pos2::new(center_x + rx * z_factor, center_y + ry * z_factor)
             };
 
-            // Determine if we need per-character deformation
             let needs_char_deform = text_deform != TextDeform::None && deform_amt != 0.0;
 
             let mut final_text_size = Vec2::ZERO;
@@ -100,7 +97,6 @@ pub fn draw(ctx: &Context, canvas_painter: &egui::Painter, preview_rect: Rect, s
                         has_words,
                     );
                 } else {
-                    // Build a galley to measure text size
                     let create_job = |override_color: Option<egui::Color32>| -> std::sync::Arc<egui::Galley> {
                         build_layout_job(ctx, sub, has_words, font_size, text_color, final_opacity, override_color, current_t)
                     };
@@ -109,7 +105,6 @@ pub fn draw(ctx: &Context, canvas_painter: &egui::Painter, preview_rect: Rect, s
                     let text_size = galley.size();
                     final_text_size = text_size;
 
-                    // Helper to draw text — uses per-character deform if active, otherwise single-galley
                     let draw_text_with_deform = |painter: &egui::Painter,
                                                   g: std::sync::Arc<egui::Galley>,
                                                   offset: Vec2,
@@ -137,8 +132,6 @@ pub fn draw(ctx: &Context, canvas_painter: &egui::Painter, preview_rect: Rect, s
                         }
                     };
 
-                    // For effects that need a specific override color, we can't easily do per-char,
-                    // so we use the single-galley path for those passes (shadow, strokes, bloom).
                     let draw_projected_text = |painter: &egui::Painter, g: std::sync::Arc<egui::Galley>, offset: Vec2| {
                         let dx = offset.x - g.size().x * 0.5;
                         let dy = offset.y - g.size().y * 0.5;
@@ -150,7 +143,6 @@ pub fn draw(ctx: &Context, canvas_painter: &egui::Painter, preview_rect: Rect, s
                         painter.add(shape);
                     };
 
-                    // Background box
                     if sub.bg_box_enabled {
                         let pad = sub.bg_box_padding * scale_factor;
                         let w = text_size.x + pad * 2.0;
@@ -172,7 +164,6 @@ pub fn draw(ctx: &Context, canvas_painter: &egui::Painter, preview_rect: Rect, s
                         active_painter.add(egui::Shape::convex_polygon(pts, box_color, Stroke::new(4.0 * scale_factor, box_color)));
                     }
 
-                    // Bloom passes (use single-galley — bloom is a blur effect)
                     if sub.bloom.enabled {
                         let b_col = egui::Color32::from_rgba_unmultiplied(
                             (sub.bloom.color[0]*255.) as u8, (sub.bloom.color[1]*255.) as u8,
@@ -192,7 +183,6 @@ pub fn draw(ctx: &Context, canvas_painter: &egui::Painter, preview_rect: Rect, s
                         }
                     }
 
-                    // Additional strokes (use single-galley)
                     if sub.additional_strokes_enabled {
                         let mut sorted_strokes = sub.additional_strokes.clone();
                         sorted_strokes.sort_by(|a, b| b.width.partial_cmp(&a.width).unwrap());
@@ -212,7 +202,6 @@ pub fn draw(ctx: &Context, canvas_painter: &egui::Painter, preview_rect: Rect, s
                         }
                     }
 
-                    // Drop shadow (use single-galley)
                     if sub.shadow_enabled {
                         let sc = sub.shadow_color;
                         let s_col = egui::Color32::from_rgba_unmultiplied((sc[0]*255.) as u8,(sc[1]*255.) as u8,(sc[2]*255.) as u8,(sc[3]*final_opacity*255.) as u8);
@@ -238,7 +227,6 @@ pub fn draw(ctx: &Context, canvas_painter: &egui::Painter, preview_rect: Rect, s
                         draw_projected_text(&active_painter, g, offset);
                     }
 
-                    // Primary stroke (use single-galley)
                     if sub.stroke_enabled && sub.stroke_width > 0.0 {
                         let sw = sub.stroke_width * scale_factor;
                         let stc = sub.stroke_color;
@@ -250,7 +238,6 @@ pub fn draw(ctx: &Context, canvas_painter: &egui::Painter, preview_rect: Rect, s
                         }
                     }
 
-                    // ── Main text — use per-char deform when active ────────────
                     if sub.glitch.enabled {
                         if sub.glitch.rgb_split > 0.0 {
                             let split = sub.glitch.rgb_split * scale_factor;
@@ -275,7 +262,7 @@ pub fn draw(ctx: &Context, canvas_painter: &egui::Painter, preview_rect: Rect, s
                             while sy < preview_rect.max.y {
                                 active_painter.line_segment(
                                     [Pos2::new(preview_rect.min.x, sy), Pos2::new(preview_rect.max.x, sy)],
-                                    Stroke::new(1.0, egui::Color32::from_black_alpha(40))
+                                    Stroke::new(1.0_f32, egui::Color32::from_black_alpha(40))
                                 );
                                 sy += 4.0;
                             }
@@ -292,9 +279,8 @@ pub fn draw(ctx: &Context, canvas_painter: &egui::Painter, preview_rect: Rect, s
                         }
                     }
                 }
-            } // end loop over clip rects
+            }
 
-            // Selection highlight
             if !path_is_active && step == 0 && vm.selected_id.as_deref() == Some(&sub.id) {
                 let text_size = final_text_size;
                 let pad = 4.0;
@@ -306,18 +292,12 @@ pub fn draw(ctx: &Context, canvas_painter: &egui::Painter, preview_rect: Rect, s
                     Vec2::new(w/2.0, h/2.0),
                     Vec2::new(-w/2.0, h/2.0),
                 ].iter().map(|v| apply_transform(v.x, v.y)).collect::<Vec<_>>();
-                let shape = egui::Shape::convex_polygon(pts, egui::Color32::TRANSPARENT, Stroke::new(1.5, ACCENT_CYAN));
+                let shape = egui::Shape::convex_polygon(pts, egui::Color32::TRANSPARENT, Stroke::new(1.5_f32, ACCENT_CYAN));
                 canvas_painter.add(shape);
             }
         }
     }
 }
-
-// ── Per-character deformed text rendering ────────────────────────────────────
-//
-// Renders text character-by-character so each glyph can be displaced
-// independently by the deform function.  This is what makes Wave, Arc,
-// Bulge and Flag actually *warp* the text instead of just translating it.
 
 fn draw_deformed_text(
     ctx: &Context,
@@ -326,13 +306,12 @@ fn draw_deformed_text(
     has_words: bool,
     font_size: f32,
     text_size: Vec2,
-    offset: Vec2,           // additional whole-text offset (e.g. Vec2::ZERO for main pass)
+    offset: Vec2,
     apply_transform: &impl Fn(f32, f32) -> Pos2,
     text_color: egui::Color32,
     final_opacity: f32,
     current_time: f64,
 ) {
-    // Build a list of (char_string, color) pairs
     let chars_with_color: Vec<(String, egui::Color32)> = if has_words {
         let mut out = Vec::new();
         for (wi, word) in sub.words.iter().enumerate() {
@@ -365,7 +344,7 @@ fn draw_deformed_text(
                     (c[0]*255.) as u8, (c[1]*255.) as u8, (c[2]*255.) as u8, (c[3]*final_opacity*255.) as u8,
                 );
             }
-            for (ci, ch) in word.text.chars().enumerate() {
+            for (_ci, ch) in word.text.chars().enumerate() {
                 out.push((ch.to_string(), wc));
             }
             if wi < sub.words.len() - 1 {
@@ -379,8 +358,6 @@ fn draw_deformed_text(
 
     if chars_with_color.is_empty() { return; }
 
-    // Measure cumulative x positions using the font
-    // We walk through and compute each character's x offset from the left edge of the text.
     let mut char_x_positions: Vec<f32> = Vec::with_capacity(chars_with_color.len() + 1);
     {
         let mut current_str = String::new();
@@ -400,7 +377,6 @@ fn draw_deformed_text(
             char_x_positions.push(w);
             prev_w = w;
         }
-        // total width is the last entry
         let _ = prev_w;
     }
 
@@ -411,12 +387,10 @@ fn draw_deformed_text(
         let char_left = char_x_positions[i];
         let char_right = char_x_positions[i + 1];
         let char_center_x = (char_left + char_right) * 0.5 - total_w * 0.5 + offset.x;
-        let char_center_y = offset.y;  // vertical center offset
+        let char_center_y = offset.y;
 
-        // Apply the deform function at this character's x position
         let screen_pos = apply_transform(char_center_x, char_center_y);
 
-        // We render each character placed so its center is at screen_pos
         let char_w = char_right - char_left;
         let galley = ctx.fonts(|f| {
             f.layout_no_wrap(
@@ -426,7 +400,6 @@ fn draw_deformed_text(
             )
         });
 
-        // Position glyph so its center aligns with screen_pos
         let draw_pos = Pos2::new(
             screen_pos.x - galley.size().x * 0.5,
             screen_pos.y - row_height * 0.5,
@@ -434,8 +407,6 @@ fn draw_deformed_text(
 
         let _ = char_w;
 
-        // For wave/arc/flag the local rotation follows the deform tangent
-        // Compute a small tangent for the character angle
         let dx_next = (char_center_x + 2.0).max(char_center_x + 0.1);
         let next_pos = apply_transform(dx_next, char_center_y);
         let char_angle = (next_pos.y - screen_pos.y).atan2(next_pos.x - screen_pos.x);
@@ -452,8 +423,6 @@ fn draw_deformed_text(
         painter.add(shape);
     }
 }
-
-// ── Build mask clip painter ───────────────────────────────────────────────────
 
 fn get_mask_clip_rects(
     sub: &crate::models::types::subtitle::Subtitle,
@@ -590,8 +559,6 @@ fn get_mask_clip_rects(
     }
 }
 
-// ── Letter/Word-by-word path text rendering ──────────────────────────────────
-
 fn draw_text_on_path(
     ctx: &Context,
     painter: &egui::Painter,
@@ -727,8 +694,6 @@ fn draw_text_on_path(
         cursor_arc += cw + space_w;
     }
 }
-
-// ── Layout job builder ────────────────────────────────────────────────────────
 
 fn build_layout_job(
     ctx: &Context,

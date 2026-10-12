@@ -1,25 +1,21 @@
 use super::EditorViewModel;
-use crate::models::types::{Project, RenderMode};
+use crate::models::types::{Project, RenderMode, MediaType};
 use crate::services::render_service::{run_render, RenderMessage};
 use std::sync::mpsc;
 
 impl EditorViewModel {
     // ── History (Undo / Redo) ─────────────────────────────────────────────────────
 
-    /// Marks the project state as modified. A snapshot will be automatically taken 
-    /// at the end of the frame once the user drops their pointer.
     pub fn mark_modified(&mut self) {
         self.pending_snapshot = true;
     }
 
-    /// Evaluates if we should snapshot the project state into history.
     pub fn maybe_snapshot(&mut self, is_pointer_down: bool) {
         if self.pending_snapshot && !is_pointer_down {
             self.snapshot();
         }
     }
 
-    /// Forces a state capture into the history queue
     pub fn snapshot(&mut self) {
         if self.history_index + 1 < self.history.len() {
             self.history.truncate(self.history_index + 1);
@@ -78,12 +74,33 @@ impl EditorViewModel {
                     self.filepath = Some(path);
                     self.selected_id = None;
                     self.selected_ids.clear();
+                    self.selected_keyframe_id = None;
                     self.update_duration();
                     self.sync.stop();
                     
                     self.history.clear();
                     self.history.push(self.project.clone());
                     self.history_index = 0;
+
+                    let mut to_extract = Vec::new();
+                    for m in &mut self.project.media_files {
+                        if m.media_type == MediaType::Video && m.color.is_none() {
+                            let cache_dir = std::env::temp_dir().join("kineticsub_cache").join(&m.id);
+                            let frame1 = cache_dir.join("frame_0001.jpg");
+                            if frame1.exists() {
+                                m.preview_ready = true;
+                                m.preview_dir = Some(cache_dir.to_string_lossy().to_string());
+                            } else {
+                                m.preview_ready = false;
+                                if !m.path.is_empty() {
+                                    to_extract.push((m.id.clone(), m.path.clone()));
+                                }
+                            }
+                        }
+                    }
+                    for (id, p) in to_extract {
+                        self.spawn_media_extractor(id, p, true, self.project.fps);
+                    }
                 }
             }
         }
@@ -141,8 +158,6 @@ impl EditorViewModel {
                         self.render_progress = 1.0;
                         self.render_status = "Export Complete!".into();
                         done_or_error = true;
-                        
-                        std::thread::spawn(|| { std::thread::sleep(std::time::Duration::from_secs(4)); });
                     }
                     RenderMessage::Error(e) => {
                         self.render_status = format!("Error: {}", e);
@@ -154,6 +169,7 @@ impl EditorViewModel {
         
         if done_or_error {
             self.render_rx = None;
+            self.is_rendering = false; // Ends rendering loop, but keeps modal open to show status.
         }
     }
 }

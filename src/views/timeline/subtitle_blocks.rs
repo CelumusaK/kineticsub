@@ -1,7 +1,6 @@
-// File: src/views/timeline/subtitle_blocks.rs
 use egui::{Context, Pos2, Rect, Stroke, Vec2};
 use crate::viewmodels::editor_vm::EditorViewModel;
-use crate::views::theme::{ACCENT_CYAN, ACCENT_CYAN_DIM, TEXT_NORM};
+use crate::views::theme::{ACCENT_CYAN, ACCENT_CYAN_DIM, TEXT_NORM, ACCENT_AMBER};
 use super::{LABEL_W, RULER_H, TRACK_H};
 
 pub fn draw_subtitle_blocks(
@@ -14,19 +13,22 @@ pub fn draw_subtitle_blocks(
     needs_sort: &mut bool,
     ctx: &Context,
 ) {
-    let sub_row_y = origin.y + RULER_H;
+    let sub_row_y = origin.y + RULER_H + (0.0 * TRACK_H); 
 
     let view_start = vm.timeline_scroll;
     let view_end   = view_start + (tracks_rect.width() - LABEL_W) as f64 / vm.timeline_zoom as f64;
 
     let mut drag_delta:  Option<(usize, bool, f64)> = None;
     let mut click_info:  Option<(String, f64, bool)> = None;
+    let mut delete_block: Option<String> = None;
+    let mut sub_resize: Option<(String, u8, f64)> = None;
     let mut drag_ended = false;
+    let mut do_group = false;
+    let mut do_ungroup = false;
 
-    let selected_ids = &vm.selected_ids;
-    let primary_id = vm.selected_id.as_deref();
+    let selected_ids = vm.selected_ids.clone();
+    let primary_id = vm.selected_id.clone();
 
-    // Create a clipped painter so items don't render over the track labels
     let track_clip = Rect::from_min_max(
         Pos2::new(origin.x + LABEL_W, tracks_rect.min.y),
         tracks_rect.max
@@ -41,21 +43,25 @@ pub fn draw_subtitle_blocks(
             break; 
         }
 
-        let is_primary  = primary_id == Some(sub.id.as_str());
+        let is_primary  = primary_id.as_deref() == Some(sub.id.as_str());
         let is_selected = selected_ids.contains(&sub.id);
         let has_media_link = sub.media_id.is_some();
+        let is_grouped = sub.group_id.is_some();
 
         let block_x = origin.x + LABEL_W + vm.time_to_px(sub.timeline_start);
         let block_w = ((sub.timeline_end - sub.timeline_start) * vm.timeline_zoom as f64) as f32;
 
         let block_rect = Rect::from_min_size(
             Pos2::new(block_x, sub_row_y + 4.0),
-            Vec2::new(block_w.max(4.0), TRACK_H - 8.0),
+            Vec2::new(block_w.max(6.0), TRACK_H - 8.0),
         );
 
-        // Intersect with track bounds to prevent dragging elements hidden behind the label panel
         let interact_rect = block_rect.intersect(track_clip);
         if !interact_rect.is_positive() { continue; }
+
+        let drag_state_id = ui.id().with(("sub_drag_mode", i));
+        let mut drag_mode = ui.data(|d| d.get_temp::<u8>(drag_state_id).unwrap_or(0));
+        let handle_w = 14.0_f32.min(block_rect.width() * 0.45);
 
         let resp = ui.interact(
             interact_rect,
@@ -63,68 +69,111 @@ pub fn draw_subtitle_blocks(
             egui::Sense::click_and_drag(),
         );
 
-        if resp.hovered() { *hovered_block = true; }
+        if resp.drag_started() {
+            if let Some(pos) = resp.interact_pointer_pos() {
+                if pos.x <= block_rect.min.x + handle_w {
+                    drag_mode = 1;
+                } else if pos.x >= block_rect.max.x - handle_w {
+                    drag_mode = 2;
+                } else {
+                    drag_mode = 0;
+                }
+                ui.data_mut(|d| d.insert_temp(drag_state_id, drag_mode));
+            }
+        }
+        
+        if resp.hovered() && !resp.dragged() {
+            *hovered_block = true;
+            if let Some(pos) = ctx.pointer_hover_pos() {
+                if pos.x <= block_rect.min.x + handle_w || pos.x >= block_rect.max.x - handle_w {
+                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeHorizontal);
+                } else {
+                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
+                }
+            }
+        }
 
         if resp.clicked() {
             let shift = ctx.input(|inp| inp.modifiers.shift);
-            
-            if let Some(pos) = resp.interact_pointer_pos() {
-                // Drop playhead exactly where the mouse clicked...
-                let mut target_time = vm.px_to_time(pos.x - origin.x - LABEL_W);
-                
-                // ...UNLESS we clicked directly on a keyframe diamond
-                let sub_dur = sub.timeline_end - sub.timeline_start;
-                if sub_dur > 0.0 && block_w > 10.0 {
-                    for kf in &sub.keyframes {
-                        let kf_t = kf.time_offset;
-                        if kf_t < 0.0 || kf_t > sub_dur { continue; }
-                        let kf_x = block_rect.min.x + (kf_t / sub_dur) as f32 * block_rect.width();
-                        let kf_pos = Pos2::new(kf_x, block_rect.max.y - 4.0);
-                        
-                        // Hitbox check (the diamond visual is roughly 3.5px wide)
-                        if pos.distance(kf_pos) <= 6.0 {
-                            target_time = sub.timeline_start + kf_t;
-                            break;
-                        }
-                    }
-                }
-                
-                click_info = Some((sub.id.clone(), target_time, shift));
-            } else {
-                click_info = Some((sub.id.clone(), sub.timeline_start, shift));
-            }
+            let click_pos = ctx.input(|inp| inp.pointer.interact_pos().or(inp.pointer.hover_pos()));
+            let seek_time = click_pos.map(|pos| {
+                vm.px_to_time(pos.x - (origin.x + LABEL_W)).clamp(0.0, vm.project.duration)
+            }).unwrap_or(sub.timeline_start);
+            vm.selected_track = 0;
+            click_info = Some((sub.id.clone(), seek_time, shift));
         }
 
         if resp.dragged() && !has_media_link {
             let dt = resp.drag_delta().x as f64 / vm.timeline_zoom as f64;
-            drag_delta = Some((i, is_selected && selected_ids.len() > 1, dt));
+            if drag_mode == 0 {
+                drag_delta = Some((i, is_selected && selected_ids.len() > 1, dt));
+            } else {
+                sub_resize = Some((sub.id.clone(), drag_mode, dt));
+            }
         }
-        if resp.drag_stopped() { drag_ended = true; }
+        if resp.drag_stopped() {
+            ui.data_mut(|d| d.remove_temp::<u8>(drag_state_id));
+            drag_ended = true;
+        }
 
-        // ── Paint ─────────────────────────────────────────────────────────────
+        resp.context_menu(|ui| {
+            if selected_ids.len() > 1 {
+                if ui.button("🔗 Group Selected").clicked() {
+                    do_group = true;
+                    ui.close_menu();
+                }
+            }
+            if is_grouped {
+                if ui.button("🔓 Ungroup").clicked() {
+                    do_ungroup = true;
+                    ui.close_menu();
+                }
+            }
+            ui.separator();
+            if ui.button(egui::RichText::new("🗑 Delete").color(ACCENT_AMBER)).clicked() {
+                delete_block = Some(sub.id.clone());
+                ui.close_menu();
+            }
+        });
+
         let fill = if is_primary {
-            egui::Color32::from_rgba_premultiplied(34, 211, 238, 65)
+            egui::Color32::from_rgba_premultiplied(34, 211, 238, 75)
         } else if is_selected {
-            egui::Color32::from_rgba_premultiplied(34, 211, 238, 40)
+            egui::Color32::from_rgba_premultiplied(34, 211, 238, 48)
         } else {
-            egui::Color32::from_rgba_premultiplied(34, 211, 238, 22)
+            egui::Color32::from_rgba_premultiplied(34, 211, 238, 26)
         };
         let stroke_col = if is_primary { ACCENT_CYAN } else { ACCENT_CYAN_DIM };
 
-        p.rect_filled(block_rect, 3.0, fill);
+        p.rect_filled(block_rect, 4.0, fill);
         p.rect_stroke(
             block_rect,
-            3.0,
-            Stroke::new(if is_primary { 1.5 } else { 1.0 }, stroke_col),
+            4.0,
+            Stroke::new(if is_primary { 1.5_f32 } else { 1.0_f32 }, stroke_col),
         );
+
+        if resp.hovered() && block_w > 20.0 {
+            let left_grip = Rect::from_min_max(block_rect.min, Pos2::new(block_rect.min.x + 3.0, block_rect.max.y));
+            let right_grip = Rect::from_min_max(Pos2::new(block_rect.max.x - 3.0, block_rect.min.y), block_rect.max);
+            p.rect_filled(left_grip, 1.0, stroke_col);
+            p.rect_filled(right_grip, 1.0, stroke_col);
+        }
 
         if has_media_link {
             p.text(
-                Pos2::new(block_rect.min.x + 2.0, block_rect.min.y + 1.0),
+                Pos2::new(block_rect.min.x + 3.0, block_rect.min.y + 2.0),
                 egui::Align2::LEFT_TOP,
                 "⛓",
-                egui::FontId::proportional(7.0),
-                egui::Color32::from_rgba_unmultiplied(245, 158, 11, 160),
+                egui::FontId::proportional(7.5),
+                egui::Color32::from_rgba_unmultiplied(245, 158, 11, 180),
+            );
+        } else if is_grouped {
+            p.text(
+                Pos2::new(block_rect.min.x + 3.0, block_rect.min.y + 2.0),
+                egui::Align2::LEFT_TOP,
+                "🔗",
+                egui::FontId::proportional(7.5),
+                ACCENT_CYAN,
             );
         }
 
@@ -138,7 +187,7 @@ pub fn draw_subtitle_blocks(
                 block_rect.center_top() + Vec2::new(0.0, 5.0),
                 egui::Align2::CENTER_TOP,
                 &sub.text,
-                egui::FontId::proportional(9.0),
+                egui::FontId::proportional(9.5),
                 text_color,
             );
         }
@@ -155,6 +204,19 @@ pub fn draw_subtitle_blocks(
 
                 let kf_pos  = Pos2::new(kf_x, block_rect.max.y - 4.0);
                 let d       = 3.5f32;
+                
+                let kf_rect = Rect::from_center_size(kf_pos, Vec2::splat(d * 2.5));
+                let kf_resp = ui.interact(kf_rect, ui.id().with(("kf_sub", &sub.id, kf_t.to_bits())), egui::Sense::click());
+                if kf_resp.clicked() {
+                    let click_pos = ctx.input(|inp| inp.pointer.interact_pos().or(inp.pointer.hover_pos()));
+                    let seek_time = click_pos.map(|pos| {
+                        vm.px_to_time(pos.x - (origin.x + LABEL_W)).clamp(0.0, vm.project.duration)
+                    }).unwrap_or(sub.timeline_start + kf_t);
+                    click_info = Some((sub.id.clone(), seek_time, false));
+                }
+
+                let kf_color = if kf_resp.hovered() { egui::Color32::WHITE } else { egui::Color32::from_rgb(34, 211, 238) };
+
                 p.add(egui::Shape::convex_polygon(
                     vec![
                         Pos2::new(kf_pos.x,     kf_pos.y - d),
@@ -162,33 +224,36 @@ pub fn draw_subtitle_blocks(
                         Pos2::new(kf_pos.x,     kf_pos.y + d),
                         Pos2::new(kf_pos.x - d, kf_pos.y    ),
                     ],
-                    egui::Color32::from_rgb(34, 211, 238),
+                    kf_color,
                     Stroke::NONE,
                 ));
             }
         }
     }
 
-    // ── Apply mutations after the immutable loop ─────────────────────
+    if do_group { vm.group_selected(); }
+    if do_ungroup { vm.ungroup_selected(); }
+
+    if let Some((id, mode, dt)) = sub_resize {
+        vm.resize_subtitle_clip(&id, mode, dt);
+    }
+
     if let Some((id, start, shift)) = click_info {
         if shift {
             vm.toggle_select(&id);
         } else {
-            vm.select_subtitle(Some(id));
-            vm.seek_to(start); // Jumps EXACTLY to mouse or keyframe hit-box
+            vm.select_with_group(&id);
+            vm.seek_to(start); 
         }
+    }
+
+    if let Some(id) = delete_block {
+        vm.delete_subtitle(&id);
     }
 
     if let Some((idx, is_multi, dt)) = drag_delta {
         if is_multi {
-            let ids: Vec<String> = vm.selected_ids.iter().cloned().collect();
-            for sub in vm.project.subtitles.iter_mut() {
-                if ids.contains(&sub.id) && sub.media_id.is_none() {
-                    sub.timeline_start = (sub.timeline_start + dt).max(0.0);
-                    sub.timeline_end   = (sub.timeline_end   + dt).max(sub.timeline_start + 0.05);
-                }
-            }
-            vm.update_duration();
+            vm.move_selected_items(dt);
         } else {
             vm.move_subtitle_idx(idx, dt);
         }

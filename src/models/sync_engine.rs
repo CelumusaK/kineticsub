@@ -1,4 +1,3 @@
-// File: src/models/sync_engine.rs
 use std::time::Instant;
 
 /// Drives playback timing independently from the render loop.
@@ -52,9 +51,8 @@ impl SyncEngine {
     }
 
     pub fn seek(&mut self, time: f64) {
-        // Unclamped from self.duration - lets you dynamically scrub & scroll out
-        // into the empty bounds area flawlessly!
-        self.current_time = time.max(0.0);
+        // Clamp to avoid timeline bounds glitching out into empty space!
+        self.current_time = time.clamp(0.0, self.duration);
         self.last_tick = Instant::now();
     }
 
@@ -62,7 +60,6 @@ impl SyncEngine {
         self.seek(self.current_time + delta);
     }
 
-    /// Call once per frame; advances internal clock and returns elapsed seconds.
     pub fn tick(&mut self) -> f64 {
         let now = Instant::now();
         let dt = now.duration_since(self.last_tick).as_secs_f64();
@@ -70,7 +67,6 @@ impl SyncEngine {
 
         if self.state == PlaybackState::Playing {
             self.current_time += dt;
-            // Stop playing naturally if we hit the red boundary marker
             if self.current_time >= self.duration {
                 self.current_time = self.duration;
                 self.pause();
@@ -79,7 +75,6 @@ impl SyncEngine {
         dt
     }
 
-    /// Progress 0..1 through the total duration.
     pub fn progress(&self) -> f64 {
         if self.duration > 0.0 {
             self.current_time / self.duration

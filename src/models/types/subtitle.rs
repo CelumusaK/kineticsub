@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use super::animation::{Keyframe, InterpolatedState, ease_out_cubic, apply_ease};
+use super::animation::{Keyframe, InterpolatedState, ease_out_cubic, LoopMode, Easing};
 
 // ── Text Advanced Features ────────────────────────────────────────────────────
 
@@ -106,15 +106,7 @@ impl Default for TextAlign {
     fn default() -> Self { TextAlign::Center }
 }
 
-// ── New Mechanics ─────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub enum LoopMode {
-    #[default]
-    None,
-    Loop,
-    PingPong,
-}
+// ── Physics & Expressions ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PhysicsSettings {
@@ -149,7 +141,6 @@ pub fn eval_expr(expr: &str, t: f64) -> f32 {
             if parts.len() == 2 {
                 let freq = parts[0].parse::<f32>().unwrap_or(0.0);
                 let amp = parts[1].parse::<f32>().unwrap_or(0.0);
-                // Pseudo-random organic multi-sine wiggle
                 let p1 = (t as f32 * freq * 6.28318).sin();
                 let p2 = (t as f32 * freq * 4.123 + 2.0).cos();
                 let p3 = (t as f32 * freq * 2.5 + 4.0).sin();
@@ -163,7 +154,6 @@ pub fn eval_expr(expr: &str, t: f64) -> f32 {
     0.0
 }
 
-
 // ── Subtitle ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -174,8 +164,9 @@ pub struct Subtitle {
     pub timeline_start: f64,
     pub timeline_end: f64,
     
-    // Parenting
+    // Parenting & Grouping
     #[serde(default)] pub parent_id: Option<String>,
+    #[serde(default)] pub group_id: Option<String>,
     
     // Transform
     pub x: f32,
@@ -281,6 +272,7 @@ impl Subtitle {
             id: id.to_string(),
             media_id: None,
             parent_id: None,
+            group_id: None,
             text: text.to_string(),
             timeline_start: start,
             timeline_end: end,
@@ -321,6 +313,33 @@ impl Subtitle {
     }
 
     pub fn duration(&self) -> f64 { self.timeline_end - self.timeline_start }
+
+    pub fn apply_state_auto_key(&mut self, local_t: f64, record_mode: bool, state: &InterpolatedState) {
+        if !self.keyframes.is_empty() || record_mode {
+            if let Some(kf) = self.keyframes.iter_mut().find(|k| (k.time_offset - local_t).abs() < 0.02) {
+                kf.x = state.x; kf.y = state.y; kf.scale = state.scale; kf.rotation = state.rotation;
+                kf.opacity = state.opacity; kf.skew_x = state.skew_x; kf.skew_y = state.skew_y;
+                kf.yaw = state.yaw; kf.pitch = state.pitch; kf.path_progress = state.path_progress;
+            } else {
+                let kf = Keyframe {
+                    id: format!("kf_{}", uuid::Uuid::new_v4()),
+                    time_offset: local_t,
+                    x: state.x, y: state.y, scale: state.scale, rotation: state.rotation,
+                    opacity: state.opacity, skew_x: state.skew_x, skew_y: state.skew_y,
+                    yaw: state.yaw, pitch: state.pitch, path_progress: state.path_progress,
+                    mask_center: state.mask_center, mask_size: state.mask_size,
+                    mask_rotation: state.mask_rotation, mask_feather: state.mask_feather,
+                    easing: Easing::Linear,
+                };
+                self.keyframes.push(kf);
+                self.keyframes.sort_by(|a, b| a.time_offset.partial_cmp(&b.time_offset).unwrap());
+            }
+        } else {
+            self.x = state.x; self.y = state.y; self.scale = state.scale; self.rotation = state.rotation;
+            self.opacity = state.opacity; self.skew_x = state.skew_x; self.skew_y = state.skew_y;
+            self.yaw = state.yaw; self.pitch = state.pitch; self.path_progress = state.path_progress;
+        }
+    }
 
     pub fn evaluate_path(&self, p: f32) -> (f32, f32, f32) {
         let get_xy = |p: f32| -> (f32, f32) {
@@ -409,77 +428,12 @@ impl Subtitle {
         };
 
         let local_time = current_time - self.timeline_start;
-        let mut eval_time = local_time;
+        
+        base = crate::models::types::animation::interpolate_keyframes(
+            current_time, self.timeline_start, &self.keyframes, &self.loop_mode, base
+        );
 
-        // Keyframe Animation & Looping
-        if !self.keyframes.is_empty() {
-            let mut sorted = self.keyframes.clone();
-            sorted.sort_by(|a, b| a.time_offset.partial_cmp(&b.time_offset).unwrap());
-            
-            let first_t = sorted.first().unwrap().time_offset;
-            let last_t = sorted.last().unwrap().time_offset;
-            let kf_dur = last_t - first_t;
-
-            if kf_dur > 0.0 && local_time > last_t {
-                match self.loop_mode {
-                    LoopMode::None => eval_time = last_t,
-                    LoopMode::Loop => eval_time = first_t + ((local_time - first_t) % kf_dur),
-                    LoopMode::PingPong => {
-                        let cycle = ((local_time - first_t) / kf_dur).floor() as i32;
-                        let rem = (local_time - first_t) % kf_dur;
-                        if cycle % 2 == 0 { eval_time = first_t + rem; }
-                        else { eval_time = last_t - rem; }
-                    }
-                }
-            } else if local_time < first_t {
-                eval_time = first_t;
-            }
-
-            let mut applied_kf = false;
-            for i in 0..sorted.len() - 1 {
-                let k1 = &sorted[i];
-                let k2 = &sorted[i + 1];
-                if eval_time >= k1.time_offset && eval_time <= k2.time_offset {
-                    let dur = k2.time_offset - k1.time_offset;
-                    let raw = if dur > 0.0 { (eval_time - k1.time_offset) / dur } else { 1.0 };
-                    let e = apply_ease(raw, &k2.easing) as f32;
-                    
-                    base.x = k1.x + (k2.x - k1.x) * e;
-                    base.y = k1.y + (k2.y - k1.y) * e;
-                    base.scale = k1.scale + (k2.scale - k1.scale) * e;
-                    base.rotation = k1.rotation + (k2.rotation - k1.rotation) * e;
-                    base.opacity = k1.opacity + (k2.opacity - k1.opacity) * e;
-                    base.skew_x = k1.skew_x + (k2.skew_x - k1.skew_x) * e;
-                    base.skew_y = k1.skew_y + (k2.skew_y - k1.skew_y) * e;
-                    base.yaw = k1.yaw + (k2.yaw - k1.yaw) * e;
-                    base.pitch = k1.pitch + (k2.pitch - k1.pitch) * e;
-                    base.path_progress = k1.path_progress + (k2.path_progress - k1.path_progress) * e;
-                    base.mask_center = [
-                        k1.mask_center[0] + (k2.mask_center[0] - k1.mask_center[0]) * e,
-                        k1.mask_center[1] + (k2.mask_center[1] - k1.mask_center[1]) * e,
-                    ];
-                    base.mask_size = [
-                        k1.mask_size[0] + (k2.mask_size[0] - k1.mask_size[0]) * e,
-                        k1.mask_size[1] + (k2.mask_size[1] - k1.mask_size[1]) * e,
-                    ];
-                    base.mask_rotation = k1.mask_rotation + (k2.mask_rotation - k1.mask_rotation) * e;
-                    base.mask_feather = k1.mask_feather + (k2.mask_feather - k1.mask_feather) * e;
-                    
-                    applied_kf = true;
-                    break;
-                }
-            }
-            if !applied_kf {
-                if eval_time <= first_t {
-                    let k = sorted.first().unwrap();
-                    base.x = k.x; base.y = k.y; base.scale = k.scale; base.rotation = k.rotation; base.opacity = k.opacity;
-                } else if eval_time >= last_t {
-                    let k = sorted.last().unwrap();
-                    base.x = k.x; base.y = k.y; base.scale = k.scale; base.rotation = k.rotation; base.opacity = k.opacity;
-                }
-            }
-        } else {
-            // Default pop-in animation if no keyframes
+        if self.keyframes.is_empty() {
             let anim_dur = 0.08;
             if local_time >= 0.0 && local_time < anim_dur {
                 let p = ease_out_cubic(local_time / anim_dur) as f32;
@@ -490,13 +444,11 @@ impl Subtitle {
             }
         }
 
-        // Apply Expressions
         base.x += eval_expr(&self.expressions.x, local_time);
         base.y += eval_expr(&self.expressions.y, local_time);
         base.scale += eval_expr(&self.expressions.scale, local_time);
         base.rotation += eval_expr(&self.expressions.rotation, local_time);
 
-        // Apply Deterministic Physics
         if self.physics.enabled && local_time > 0.0 {
             let dt: f64 = 1.0 / 60.0;
             let mut sim_t: f64 = 0.0;
@@ -518,7 +470,7 @@ impl Subtitle {
                 if py > floor {
                     py = floor;
                     vy = -vy * bounce;
-                    vx *= 0.95; // slight friction
+                    vx *= 0.95; 
                 }
                 sim_t += dt;
             }
@@ -526,7 +478,6 @@ impl Subtitle {
             base.y += py;
         }
 
-        // Apply Parenting (Null Object Tracking)
         if depth < 5 {
             if let Some(pid) = &self.parent_id {
                 if let Some(parent) = all_subs.iter().find(|s| &s.id == pid) {
@@ -535,7 +486,6 @@ impl Subtitle {
                     base.y += p_state.y;
                     base.scale *= p_state.scale;
                     base.rotation += p_state.rotation;
-                    // Note: Optional opacity inheritance
                 }
             }
         }

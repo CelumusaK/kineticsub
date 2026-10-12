@@ -1,7 +1,5 @@
 use egui::{Color32, Rounding, Stroke, Style, Visuals};
 
-// ── Palette ───────────────────────────────────────────────────────────────────
-
 pub const BG_BASE:       Color32 = Color32::from_rgb(13,  15,  19);
 pub const BG_PANEL:      Color32 = Color32::from_rgb(17,  19,  24);
 pub const BG_PANEL_ALT:  Color32 = Color32::from_rgb(15,  17,  21);
@@ -19,9 +17,6 @@ pub const ACCENT_CYAN:   Color32 = Color32::from_rgb(34,  211, 238);
 pub const ACCENT_CYAN_DIM: Color32 = Color32::from_rgb(22, 140, 158);
 pub const ACCENT_AMBER:  Color32 = Color32::from_rgb(245, 158,  11);
 
-// ── egui style ────────────────────────────────────────────────────────────────
-
-/// Apply the KineticSub dark theme to an egui `Style`.
 pub fn apply(style: &mut Style) {
     style.visuals = dark_visuals();
     style.spacing.item_spacing    = egui::vec2(6.0, 4.0);
@@ -39,31 +34,31 @@ fn dark_visuals() -> Visuals {
     v.extreme_bg_color    = BG_BASE;
     v.code_bg_color       = BG_BASE;
 
-    let border_stroke = Stroke::new(1.0, BORDER);
+    let border_stroke = Stroke::new(1.0_f32, BORDER);
 
     v.window_stroke       = border_stroke;
     v.widgets.noninteractive.bg_fill   = BG_PANEL;
     v.widgets.noninteractive.bg_stroke = border_stroke;
-    v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT_DIM);
+    v.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, TEXT_DIM);
     v.widgets.noninteractive.rounding  = Rounding::same(3.0);
 
     v.widgets.inactive.bg_fill   = BG_PANEL_ALT;
     v.widgets.inactive.bg_stroke = border_stroke;
-    v.widgets.inactive.fg_stroke = Stroke::new(1.0, TEXT_NORM);
+    v.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, TEXT_NORM);
     v.widgets.inactive.rounding  = Rounding::same(3.0);
 
     v.widgets.hovered.bg_fill   = BG_HOVER;
-    v.widgets.hovered.bg_stroke = Stroke::new(1.0, BORDER_FOCUS);
-    v.widgets.hovered.fg_stroke = Stroke::new(1.0, TEXT_BRIGHT);
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, BORDER_FOCUS);
+    v.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, TEXT_BRIGHT);
     v.widgets.hovered.rounding  = Rounding::same(3.0);
 
     v.widgets.active.bg_fill   = BG_SELECTED;
-    v.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT_CYAN);
-    v.widgets.active.fg_stroke = Stroke::new(1.0, ACCENT_CYAN);
+    v.widgets.active.bg_stroke = Stroke::new(1.0_f32, ACCENT_CYAN);
+    v.widgets.active.fg_stroke = Stroke::new(1.0_f32, ACCENT_CYAN);
     v.widgets.active.rounding  = Rounding::same(3.0);
 
     v.selection.bg_fill  = ACCENT_CYAN.linear_multiply(0.2);
-    v.selection.stroke   = Stroke::new(1.0, ACCENT_CYAN);
+    v.selection.stroke   = Stroke::new(1.0_f32, ACCENT_CYAN);
 
     v.hyperlink_color    = ACCENT_CYAN;
     v.faint_bg_color     = BG_BASE;
