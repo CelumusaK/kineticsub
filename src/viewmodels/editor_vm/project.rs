@@ -74,7 +74,7 @@ impl EditorViewModel {
                     self.filepath = Some(path);
                     self.selected_id = None;
                     self.selected_ids.clear();
-                    self.selected_keyframe_id = None;
+                    self.selected_keyframe_ids.clear();
                     self.update_duration();
                     self.sync.stop();
                     

@@ -5,32 +5,20 @@ use crate::models::types::project::MediaFolder;
 
 impl EditorViewModel {
     pub fn move_subtitle_idx(&mut self, index: usize, delta_secs: f64) {
-        let (mut left_bound, mut right_bound) = (0.0_f64, f64::INFINITY);
         let sub = match self.project.subtitles.get(index) {
             Some(s) => s.clone(),
             None => return,
         };
 
-        for (idx, other) in self.project.subtitles.iter().enumerate() {
-            if idx != index {
-                if other.timeline_end <= sub.timeline_start + 0.001 {
-                    if other.timeline_end > left_bound { left_bound = other.timeline_end; }
-                }
-                if other.timeline_start >= sub.timeline_end - 0.001 {
-                    if other.timeline_start < right_bound { right_bound = other.timeline_start; }
-                }
-            }
-        }
-
-        let dur = sub.duration();
-        let target_start = sub.timeline_start + delta_secs;
-        let max_start = (right_bound - dur).max(left_bound);
-        let new_start = target_start.clamp(left_bound, max_start);
+        let target_start = (sub.timeline_start + delta_secs).max(0.0);
 
         if let Some(sub_mut) = self.project.subtitles.get_mut(index) {
-            sub_mut.timeline_start = new_start;
-            sub_mut.timeline_end = new_start + dur;
+            let dur = sub_mut.duration();
+            sub_mut.timeline_start = target_start;
+            sub_mut.timeline_end = target_start + dur;
         }
+        
+        self.resolve_all_overlaps();
         self.mark_modified();
         self.update_duration();
     }
@@ -133,6 +121,7 @@ impl EditorViewModel {
             }
         }
 
+        self.resolve_all_overlaps();
         self.mark_modified();
         self.update_duration();
     }
@@ -165,7 +154,7 @@ impl EditorViewModel {
         self.project.subtitles.retain(|s| s.id != id);
         if self.selected_id.as_deref() == Some(id) { 
             self.selected_id = None; 
-            self.selected_keyframe_id = None;
+            self.selected_keyframe_ids.clear();
         }
         self.selected_ids.remove(id);
         self.update_duration();
@@ -191,7 +180,7 @@ impl EditorViewModel {
         if let Some(sel) = &self.selected_id.clone() {
             if ids.contains(sel) { 
                 self.selected_id = None; 
-                self.selected_keyframe_id = None;
+                self.selected_keyframe_ids.clear();
             }
         }
         self.selected_ids.clear();
@@ -361,7 +350,7 @@ impl EditorViewModel {
 
     pub fn select_subtitle(&mut self, id: Option<String>) {
         if self.selected_id != id {
-            self.selected_keyframe_id = None;
+            self.selected_keyframe_ids.clear();
         }
         self.selected_id = id.clone();
         self.selected_ids.clear();
@@ -373,13 +362,13 @@ impl EditorViewModel {
             self.selected_ids.remove(id);
             if self.selected_id.as_deref() == Some(id) {
                 self.selected_id = self.selected_ids.iter().next().cloned();
-                self.selected_keyframe_id = None;
+                self.selected_keyframe_ids.clear();
             }
         } else {
             self.selected_ids.insert(id.to_string());
             if self.selected_id.is_none() { 
                 self.selected_id = Some(id.to_string()); 
-                self.selected_keyframe_id = None;
+                self.selected_keyframe_ids.clear();
             }
         }
     }
@@ -481,7 +470,7 @@ impl EditorViewModel {
         for m in self.project.media_files.iter_mut() {
             if ids.contains(&m.id) { m.keyframes.clear(); }
         }
-        self.selected_keyframe_id = None;
+        self.selected_keyframe_ids.clear();
         self.snapshot();
     }
 

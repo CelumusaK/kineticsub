@@ -25,6 +25,7 @@ pub fn draw_media_blocks(
     let mut media_resize: Option<(String, u8, f64)> = None;
     let mut do_group = false;
     let mut do_ungroup = false;
+    let mut clear_collisions = false;
 
     let track_clip = Rect::from_min_max(
         Pos2::new(origin.x + LABEL_W, tracks_rect.min.y),
@@ -74,6 +75,8 @@ pub fn draw_media_blocks(
         let drag_state_id = ui.id().with(("media_drag_mode", i));
         let mut drag_mode = ui.data(|d| d.get_temp::<u8>(drag_state_id).unwrap_or(0));
 
+        let handle_width = 14.0f32.min(rect.width() * 0.4);
+
         let resp = ui.interact(
             interact_rect,
             ui.id().with(format!("media_{}", id)),
@@ -82,8 +85,11 @@ pub fn draw_media_blocks(
         
         if resp.drag_started() {
             if let Some(pos) = resp.interact_pointer_pos() {
-                if pos.x < rect.min.x + 8.0 { drag_mode = 1; }
-                else if pos.x > rect.max.x - 8.0 { drag_mode = 2; }
+                let dist_left = (pos.x - rect.min.x).abs();
+                let dist_right = (pos.x - rect.max.x).abs();
+                
+                if dist_left <= handle_width { drag_mode = 1; }
+                else if dist_right <= handle_width { drag_mode = 2; }
                 else { drag_mode = 0; }
                 ui.data_mut(|d| d.insert_temp(drag_state_id, drag_mode));
             }
@@ -95,7 +101,9 @@ pub fn draw_media_blocks(
         if resp.hovered() && !resp.dragged() {
             *hovered_block = true;
             if let Some(pos) = ctx.pointer_hover_pos() {
-                if pos.x < rect.min.x + 8.0 || pos.x > rect.max.x - 8.0 {
+                let dist_left = (pos.x - rect.min.x).abs();
+                let dist_right = (pos.x - rect.max.x).abs();
+                if dist_left <= handle_width || dist_right <= handle_width {
                     ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeHorizontal);
                 } else {
                     ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
@@ -126,6 +134,11 @@ pub fn draw_media_blocks(
             } else {
                 media_resize = Some((id.clone(), drag_mode, dt));
             }
+        }
+        
+        if resp.drag_stopped() {
+            ui.data_mut(|d| d.remove_temp::<u8>(drag_state_id));
+            clear_collisions = true;
         }
 
         resp.context_menu(|ui| {
@@ -189,6 +202,8 @@ pub fn draw_media_blocks(
 
         let block_col = if is_transcribing {
             egui::Color32::from_rgba_unmultiplied(34, 211, 238, 35) 
+        } else if media.has_collision {
+            egui::Color32::from_rgba_unmultiplied(239, 68, 68, 120) // Red collision indicator
         } else if media.media_type == MediaType::Video {
             egui::Color32::from_rgba_unmultiplied(200, 50, 100, 45)
         } else if media.media_type == MediaType::Image {
@@ -200,12 +215,13 @@ pub fn draw_media_blocks(
         p.rect_filled(rect, 3.0, block_col);
 
         let border_col = if is_transcribing { ACCENT_CYAN } 
+            else if media.has_collision { egui::Color32::from_rgb(252, 165, 165) }
             else if is_selected { ACCENT_CYAN }
             else if media.media_type == MediaType::Video { egui::Color32::from_rgb(220, 80, 130) } 
             else if media.media_type == MediaType::Image { egui::Color32::from_rgb(80, 180, 220) } 
             else { ACCENT_AMBER };
             
-        p.rect_stroke(rect, 3.0, Stroke::new(if is_transcribing || is_selected { 2.0_f32 } else { 1.0_f32 }, border_col));
+        p.rect_stroke(rect, 3.0, Stroke::new(if is_transcribing || is_selected || media.has_collision { 2.0_f32 } else { 1.0_f32 }, border_col));
 
         if media.media_type == MediaType::Audio || media.media_type == MediaType::Video {
             let stripe_spacing = 6.0;
@@ -284,62 +300,16 @@ pub fn draw_media_blocks(
         }
     }
     
+    if clear_collisions {
+        for m in &mut vm.project.media_files { m.has_collision = false; }
+        for s in &mut vm.project.subtitles { s.has_collision = false; }
+    }
+
     if do_group { vm.group_selected(); }
     if do_ungroup { vm.ungroup_selected(); }
 
     if let Some((id, mode, dt)) = media_resize {
-        let parent_dur = vm.project.media_files.iter().find(|m| m.id == id).and_then(|m| {
-            if m.source_duration.is_some() {
-                m.source_duration
-            } else {
-                vm.project.media_files.iter()
-                    .find(|other| other.media_type == MediaType::Video && m.path.contains(&other.id))
-                    .and_then(|v| v.source_duration)
-            }
-        });
-
-        if let Some(m) = vm.project.media_files.iter_mut().find(|m| m.id == id) {
-            let speed = m.playback_speed.max(0.001);
-
-            if m.media_type == MediaType::Image {
-                if mode == 1 {
-                    let max_dt = m.duration - 0.1;
-                    let actual_dt = dt.clamp(-m.timeline_offset, max_dt);
-                    let new_dur = m.duration - actual_dt;
-                    if new_dur <= 5.0 {
-                        m.timeline_offset += actual_dt;
-                        m.duration = new_dur.max(0.1);
-                    }
-                } else if mode == 2 {
-                    m.duration = (m.duration + dt).clamp(0.1, 5.0);
-                }
-            } else {
-                let total_dur = m.source_duration.or(parent_dur);
-
-                if mode == 1 {
-                    let max_dt = m.duration - 0.1;
-                    let min_dt_timeline = -m.timeline_offset;
-                    let min_dt_trim = -m.trim_start / speed;
-                    let min_dt = min_dt_timeline.max(min_dt_trim);
-
-                    let actual_dt = dt.clamp(min_dt, max_dt);
-                    m.timeline_offset += actual_dt;
-                    m.duration -= actual_dt;
-                    m.trim_start = (m.trim_start + actual_dt * speed).max(0.0);
-                } else if mode == 2 {
-                    let mut new_duration = m.duration + dt;
-                    if let Some(total) = total_dur {
-                        let max_dur = ((total - m.trim_start) / speed).max(0.1);
-                        new_duration = new_duration.clamp(0.1, max_dur);
-                    } else {
-                        new_duration = new_duration.clamp(0.1, m.duration);
-                    }
-                    m.duration = new_duration;
-                }
-            }
-        }
-        vm.mark_modified();
-        vm.update_duration();
+        vm.resize_media_clip(&id, mode, dt);
     }
 
     if let Some((id, shift, row_idx, target_time)) = selection_action {

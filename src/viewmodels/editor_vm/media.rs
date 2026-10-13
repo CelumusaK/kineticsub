@@ -109,6 +109,7 @@ impl EditorViewModel {
                 loop_mode: Default::default(),
                 group_id: None,
                 folder_id: None,
+                has_collision: false,
             });
 
             if media_type != MediaType::Image {
@@ -208,6 +209,7 @@ impl EditorViewModel {
             loop_mode: Default::default(),
             group_id: None,
             folder_id: None,
+            has_collision: false,
         });
         self.snapshot();
     }
@@ -371,39 +373,17 @@ impl EditorViewModel {
             }
         }
 
-        let mut max_left_bound = 0.0_f64;
-        let mut min_right_bound = f64::INFINITY;
-
-        for (idx, other) in self.project.media_files.iter().enumerate() {
-            if idx != index && other.on_timeline && other.track_index == final_track && (other.media_type == MediaType::Audio) == is_audio {
-                let other_start = other.timeline_offset;
-                let other_end = other.timeline_offset + other.duration;
-                if other_end <= media.timeline_offset + 0.001 {
-                    if other_end > max_left_bound {
-                        max_left_bound = other_end;
-                    }
-                }
-                if other_start >= media.timeline_offset + media.duration - 0.001 {
-                    if other_start < min_right_bound {
-                        min_right_bound = other_start;
-                    }
-                }
-            }
-        }
-
-        let target_offset = media.timeline_offset + delta_secs;
-        let max_allowed = (min_right_bound - media.duration).max(max_left_bound);
-        let new_offset = target_offset.clamp(max_left_bound, max_allowed);
-        let actual_delta = new_offset - media.timeline_offset;
+        let target_offset = (media.timeline_offset + delta_secs).max(0.0);
+        let actual_delta = target_offset - media.timeline_offset;
 
         if let Some(m) = self.project.media_files.get_mut(index) {
-            m.timeline_offset = new_offset;
+            m.timeline_offset = target_offset;
             m.track_index = final_track;
         }
 
         if let Some(ref gid) = media.group_id {
-            for m in self.project.media_files.iter_mut() {
-                if m.id != media.id && m.on_timeline && m.group_id.as_deref() == Some(gid) {
+            for (i, m) in self.project.media_files.iter_mut().enumerate() {
+                if i != index && m.on_timeline && m.group_id.as_deref() == Some(gid) {
                     m.timeline_offset = (m.timeline_offset + actual_delta).max(0.0);
                 }
             }
@@ -422,6 +402,7 @@ impl EditorViewModel {
             }
         }
 
+        self.resolve_all_overlaps();
         self.mark_modified();
         self.update_duration();
     }

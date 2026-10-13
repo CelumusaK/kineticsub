@@ -1,23 +1,34 @@
-use egui::{Align, Context, Layout, TopBottomPanel};
+use egui::{Align, Context, Direction, Layout, RichText, Stroke, TopBottomPanel, vec2};
 use crate::viewmodels::editor_vm::EditorViewModel;
-use super::theme::{ACCENT_CYAN, ACCENT_AMBER, TEXT_DIM, TEXT_NORM, BG_BASE, BORDER};
+use super::theme::{
+    ACCENT_AMBER, ACCENT_CYAN, BG_BASE, BG_HOVER, BG_SELECTED, BORDER, TEXT_BRIGHT,
+    TEXT_DIM, TEXT_MUTED, TEXT_NORM,
+};
 
 pub fn draw(ctx: &Context, vm: &mut EditorViewModel) {
     TopBottomPanel::top("top_bar")
-        .exact_height(34.0)
+        .exact_height(36.0)
         .frame(egui::Frame {
             fill: BG_BASE,
-            stroke: egui::Stroke::new(1.0_f32, BORDER),
-            inner_margin: egui::Margin::symmetric(12.0, 0.0),
+            stroke: Stroke::new(1.0, BORDER),
+            inner_margin: egui::Margin::symmetric(14.0, 0.0),
             ..Default::default()
         })
         .show(ctx, |ui| {
-            ui.set_min_height(34.0);
+            ui.set_min_height(36.0);
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                ui.label(egui::RichText::new("KINETICSUB").color(ACCENT_CYAN).size(13.0).strong());
-                ui.add_space(20.0);
+                // Refined, subtle branding
+                ui.label(RichText::new("kineticsub").size(13.0).strong().color(TEXT_BRIGHT));
 
-                ui.menu_button(egui::RichText::new("File").color(TEXT_NORM).size(12.0), |ui| {
+                ui.add_space(16.0);
+                ui.painter().line_segment(
+                    [egui::pos2(ui.cursor().min.x, ui.cursor().min.y + 10.0), egui::pos2(ui.cursor().min.x, ui.cursor().min.y + 24.0)],
+                    Stroke::new(1.0, BORDER),
+                );
+                ui.add_space(16.0);
+
+                // Menu items
+                ui.menu_button(RichText::new("File").color(TEXT_NORM).size(11.5), |ui| {
                     if ui.button("Open Project...").clicked() {
                         vm.load_project();
                         ui.close_menu();
@@ -33,46 +44,62 @@ pub fn draw(ctx: &Context, vm: &mut EditorViewModel) {
                     }
                 });
 
-                ui.with_layout(Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
-                    let file_name = vm.filepath.as_ref()
-                        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
-                        .unwrap_or("Untitled.ksub".to_string());
-                    ui.label(egui::RichText::new(file_name).color(TEXT_DIM).size(12.0));
+                ui.menu_button(RichText::new("Presets").color(TEXT_NORM).size(11.5), |ui| {
+                    ui.menu_button("Text Styles", |ui| {
+                        if ui.button("Default").clicked() { vm.apply_preset("Text", "Default"); ui.close_menu(); }
+                        if ui.button("Lower Third").clicked() { vm.apply_preset("Text", "Lower Third"); ui.close_menu(); }
+                        if ui.button("Title Card").clicked() { vm.apply_preset("Text", "Title Card"); ui.close_menu(); }
+                        if ui.button("Caption").clicked() { vm.apply_preset("Text", "Caption"); ui.close_menu(); }
+                    });
+                    ui.menu_button("Visual Plates", |ui| {
+                        if ui.button("Fit to Screen").clicked() { vm.apply_preset("Video", "Fit to Screen"); ui.close_menu(); }
+                        if ui.button("Picture in Picture").clicked() { vm.apply_preset("Video", "Picture in Picture"); ui.close_menu(); }
+                    });
                 });
 
+                // Centered project file label
+                ui.with_layout(Layout::centered_and_justified(Direction::LeftToRight), |ui| {
+                    let file_name = vm.filepath.as_ref()
+                        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+                        .unwrap_or_else(|| "Untitled Project".to_string());
+                    ui.label(RichText::new(file_name).color(TEXT_DIM).size(11.5));
+                });
+
+                // Right-aligned actions
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.add(egui::Button::new(egui::RichText::new("▶ EXPORT").color(BG_BASE).strong().size(11.0)).fill(ACCENT_CYAN)).clicked() {
+                    // Export Button
+                    let export_btn = egui::Button::new(
+                        RichText::new("Export").color(BG_BASE).strong().size(11.5),
+                    )
+                    .fill(ACCENT_CYAN)
+                    .rounding(4.0)
+                    .min_size(vec2(68.0, 24.0));
+
+                    if ui.add(export_btn).clicked() {
                         vm.show_export_modal = true;
                     }
-                    
+
                     ui.add_space(8.0);
 
-                    if ui.button(egui::RichText::new("⚙ Settings").color(TEXT_NORM).size(11.0)).clicked() {
+                    // Settings Button
+                    let settings_btn = egui::Button::new(
+                        RichText::new("Settings").color(TEXT_NORM).size(11.5),
+                    )
+                    .fill(BG_HOVER)
+                    .stroke(Stroke::new(1.0, BORDER))
+                    .rounding(4.0);
+
+                    if ui.add(settings_btn).clicked() {
                         vm.show_settings_modal = true;
                     }
-                    
-                    ui.add_space(4.0);
-
-                    ui.menu_button(egui::RichText::new("✨ Presets").color(TEXT_NORM).size(11.0), |ui| {
-                        ui.menu_button("Text", |ui| {
-                            if ui.button("Default").clicked() { vm.apply_preset("Text", "Default"); ui.close_menu(); }
-                            if ui.button("Lower Third").clicked() { vm.apply_preset("Text", "Lower Third"); ui.close_menu(); }
-                            if ui.button("Title Card").clicked() { vm.apply_preset("Text", "Title Card"); ui.close_menu(); }
-                            if ui.button("Caption").clicked() { vm.apply_preset("Text", "Caption"); ui.close_menu(); }
-                        });
-                        ui.menu_button("Video & Photo", |ui| {
-                            if ui.button("Fit to Screen").clicked() { vm.apply_preset("Video", "Fit to Screen"); ui.close_menu(); }
-                            if ui.button("Picture in Picture").clicked() { vm.apply_preset("Video", "Picture in Picture"); ui.close_menu(); }
-                        });
-                    });
 
                     if vm.show_fps {
-                        ui.add_space(16.0);
+                        ui.add_space(12.0);
                         ui.label(
-                            egui::RichText::new(format!("{:.0} FPS", vm.current_fps))
+                            RichText::new(format!("{:.0} fps", vm.current_fps))
                                 .color(ACCENT_AMBER)
                                 .size(11.0)
-                                .strong()
+                                .monospace(),
                         );
                     }
                 });

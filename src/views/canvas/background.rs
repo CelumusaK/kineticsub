@@ -4,131 +4,60 @@ use crate::viewmodels::editor_vm::EditorViewModel;
 
 pub fn draw(painter: &egui::Painter, preview_rect: Rect, vm: &mut EditorViewModel, ctx: &egui::Context) {
     let current_t = vm.current_time();
-
-    // Check if current playhead is inside any active transition
-    let active_trans = vm.project.transitions.iter()
-        .find(|t| current_t >= t.timeline_start && current_t < t.timeline_start + t.duration && vm.is_transition_valid(t))
-        .cloned();
-
     let scale_factor = preview_rect.width() / vm.project.resolution.0 as f32;
 
-    if let Some(trans) = active_trans {
-        let p = ((current_t - trans.timeline_start) / trans.duration.max(0.01)).clamp(0.0, 1.0) as f32;
-        let mid_point = trans.timeline_start + trans.duration * 0.5;
+    let mut active_visuals = Vec::new();
+    let mut dip_to_black_amount = 0.0;
+    let mut dip_to_white_amount = 0.0;
 
-        // Collect outgoing clips (ending near midpoint) and incoming clips (starting near midpoint)
-        let outgoing_clips: Vec<_> = vm.project.media_files.iter()
-            .filter(|m| m.on_timeline && m.media_type != MediaType::Audio && (m.timeline_offset + m.duration - mid_point).abs() <= trans.duration * 0.6)
-            .cloned().collect();
+    for m in &vm.project.media_files {
+        if m.on_timeline && m.media_type != MediaType::Audio {
+            let is_visible = current_t >= m.timeline_offset && current_t < m.timeline_offset + m.duration;
+            
+            let mut applied_trans = None;
 
-        let incoming_clips: Vec<_> = vm.project.media_files.iter()
-            .filter(|m| m.on_timeline && m.media_type != MediaType::Audio && (m.timeline_offset - mid_point).abs() <= trans.duration * 0.6)
-            .cloned().collect();
+            for t in &vm.project.transitions {
+                if current_t >= t.timeline_start && current_t < t.timeline_start + t.duration {
+                    if t.track_index == 0 || t.track_index == m.track_index {
+                        // Is m an outgoing clip?
+                        let is_out = m.timeline_offset + m.duration >= t.timeline_start - 0.1 && m.timeline_offset + m.duration <= t.timeline_start + t.duration + 0.1;
+                        // Is m an incoming clip?
+                        let is_in = m.timeline_offset >= t.timeline_start - 0.1 && m.timeline_offset <= t.timeline_start + t.duration + 0.1;
 
-        match trans.transition_type {
-            TransitionType::Crossfade => {
-                // Render outgoing clips with fading opacity (1.0 -> 0.0)
-                for out_clip in &outgoing_clips {
-                    render_single_media(painter, preview_rect, vm, ctx, out_clip, current_t, scale_factor, 1.0 - p);
-                }
-                // Render incoming clips with rising opacity (0.0 -> 1.0)
-                for in_clip in &incoming_clips {
-                    render_single_media(painter, preview_rect, vm, ctx, in_clip, current_t, scale_factor, p);
-                }
-            }
-            TransitionType::DipToBlack => {
-                if p < 0.5 {
-                    let fade = (1.0 - p * 2.0).clamp(0.0, 1.0);
-                    for out_clip in &outgoing_clips {
-                        render_single_media(painter, preview_rect, vm, ctx, out_clip, current_t, scale_factor, fade);
+                        if is_out || is_in {
+                            let p = ((current_t - t.timeline_start) / t.duration.max(0.01)).clamp(0.0, 1.0) as f32;
+                            applied_trans = Some((t.transition_type.clone(), is_out, is_in, p));
+                            
+                            if t.transition_type == TransitionType::DipToBlack {
+                                let amt = if p < 0.5 { p * 2.0 } else { 1.0 - (p - 0.5) * 2.0 };
+                                if amt > dip_to_black_amount { dip_to_black_amount = amt; }
+                            }
+                            if t.transition_type == TransitionType::DipToWhite {
+                                let amt = if p < 0.5 { p * 2.0 } else { 1.0 - (p - 0.5) * 2.0 };
+                                if amt > dip_to_white_amount { dip_to_white_amount = amt; }
+                            }
+                            break;
+                        }
                     }
-                    let black_alpha = ((p * 2.0) * 255.0) as u8;
-                    painter.rect_filled(preview_rect, 0.0, Color32::from_black_alpha(black_alpha));
-                } else {
-                    let fade = ((p - 0.5) * 2.0).clamp(0.0, 1.0);
-                    for in_clip in &incoming_clips {
-                        render_single_media(painter, preview_rect, vm, ctx, in_clip, current_t, scale_factor, fade);
-                    }
-                    let black_alpha = ((1.0 - (p - 0.5) * 2.0) * 255.0) as u8;
-                    painter.rect_filled(preview_rect, 0.0, Color32::from_black_alpha(black_alpha));
                 }
             }
-            TransitionType::DipToWhite => {
-                if p < 0.5 {
-                    let fade = (1.0 - p * 2.0).clamp(0.0, 1.0);
-                    for out_clip in &outgoing_clips {
-                        render_single_media(painter, preview_rect, vm, ctx, out_clip, current_t, scale_factor, fade);
-                    }
-                    let white_alpha = ((p * 2.0) * 255.0) as u8;
-                    painter.rect_filled(preview_rect, 0.0, Color32::from_rgba_unmultiplied(255, 255, 255, white_alpha));
-                } else {
-                    let fade = ((p - 0.5) * 2.0).clamp(0.0, 1.0);
-                    for in_clip in &incoming_clips {
-                        render_single_media(painter, preview_rect, vm, ctx, in_clip, current_t, scale_factor, fade);
-                    }
-                    let white_alpha = ((1.0 - (p - 0.5) * 2.0) * 255.0) as u8;
-                    painter.rect_filled(preview_rect, 0.0, Color32::from_rgba_unmultiplied(255, 255, 255, white_alpha));
-                }
-            }
-            TransitionType::WipeLeft => {
-                for out_clip in &outgoing_clips {
-                    render_single_media(painter, preview_rect, vm, ctx, out_clip, current_t, scale_factor, 1.0);
-                }
-                let split_x = preview_rect.max.x - preview_rect.width() * p;
-                let clip_in_rect = Rect::from_min_max(Pos2::new(split_x, preview_rect.min.y), preview_rect.max);
-                let p_in = painter.with_clip_rect(clip_in_rect.intersect(preview_rect));
-                for in_clip in &incoming_clips {
-                    render_single_media(&p_in, preview_rect, vm, ctx, in_clip, current_t, scale_factor, 1.0);
-                }
-            }
-            TransitionType::WipeRight => {
-                for out_clip in &outgoing_clips {
-                    render_single_media(painter, preview_rect, vm, ctx, out_clip, current_t, scale_factor, 1.0);
-                }
-                let split_x = preview_rect.min.x + preview_rect.width() * p;
-                let clip_in_rect = Rect::from_min_max(preview_rect.min, Pos2::new(split_x, preview_rect.max.y));
-                let p_in = painter.with_clip_rect(clip_in_rect.intersect(preview_rect));
-                for in_clip in &incoming_clips {
-                    render_single_media(&p_in, preview_rect, vm, ctx, in_clip, current_t, scale_factor, 1.0);
-                }
-            }
-            TransitionType::SlideLeft => {
-                for out_clip in &outgoing_clips {
-                    render_single_media(painter, preview_rect, vm, ctx, out_clip, current_t, scale_factor, 1.0);
-                }
-                let offset_x = preview_rect.width() * (1.0 - p);
-                let slide_rect = preview_rect.translate(Vec2::new(offset_x, 0.0));
-                let p_in = painter.with_clip_rect(preview_rect);
-                for in_clip in &incoming_clips {
-                    render_single_media(&p_in, slide_rect, vm, ctx, in_clip, current_t, scale_factor, 1.0);
-                }
+
+            if is_visible || applied_trans.is_some() {
+                active_visuals.push((m.clone(), applied_trans));
             }
         }
-        return;
     }
 
-    // Standard Timeline Rendering
-    let mut visible_visuals: Vec<_> = vm.project.media_files.iter().filter(|m| {
-        m.on_timeline 
-        && m.media_type != MediaType::Audio 
-        && current_t >= m.timeline_offset 
-        && current_t < m.timeline_offset + m.duration
-    }).cloned().collect();
+    active_visuals.sort_by(|a, b| vm.get_track_row(b.0.track_index, false).cmp(&vm.get_track_row(a.0.track_index, false)));
 
-    visible_visuals.sort_by(|a, b| vm.get_track_row(b.track_index, false).cmp(&vm.get_track_row(a.track_index, false)));
-
-    if visible_visuals.is_empty() {
+    if active_visuals.is_empty() {
         let cell_size = 16.0;
         let cols = (preview_rect.width() / cell_size).ceil() as usize;
         let rows = (preview_rect.height() / cell_size).ceil() as usize;
         
         for r in 0..rows {
             for c in 0..cols {
-                let color = if (r + c) % 2 == 0 {
-                    Color32::from_rgb(60, 60, 60)
-                } else {
-                    Color32::from_rgb(40, 40, 40)
-                };
+                let color = if (r + c) % 2 == 0 { Color32::from_rgb(60, 60, 60) } else { Color32::from_rgb(40, 40, 40) };
                 let x = preview_rect.min.x + c as f32 * cell_size;
                 let y = preview_rect.min.y + r as f32 * cell_size;
                 let rect = Rect::from_min_size(
@@ -139,15 +68,53 @@ pub fn draw(painter: &egui::Painter, preview_rect: Rect, vm: &mut EditorViewMode
             }
         }
     } else {
-        for bg in &visible_visuals {
-            render_single_media(painter, preview_rect, vm, ctx, bg, current_t, scale_factor, 1.0);
+        for (bg, trans_mod) in &active_visuals {
+            let mut alpha_mult = 1.0;
+            let mut custom_clip = preview_rect;
+            let mut offset_px = Vec2::ZERO;
+
+            if let Some((t_type, is_out, is_in, p)) = trans_mod {
+                match t_type {
+                    TransitionType::Crossfade | TransitionType::DipToBlack | TransitionType::DipToWhite => {
+                        if *is_out { alpha_mult = 1.0 - p; }
+                        else if *is_in { alpha_mult = *p; }
+                    }
+                    TransitionType::WipeLeft => {
+                        if *is_in {
+                            let split_x = preview_rect.max.x - preview_rect.width() * p;
+                            custom_clip = Rect::from_min_max(Pos2::new(split_x, preview_rect.min.y), preview_rect.max);
+                        }
+                    }
+                    TransitionType::WipeRight => {
+                        if *is_in {
+                            let split_x = preview_rect.min.x + preview_rect.width() * p;
+                            custom_clip = Rect::from_min_max(preview_rect.min, Pos2::new(split_x, preview_rect.max.y));
+                        }
+                    }
+                    TransitionType::SlideLeft => {
+                        if *is_in { offset_px.x = preview_rect.width() * (1.0 - p); }
+                        if *is_out { offset_px.x = -preview_rect.width() * p; }
+                    }
+                }
+            }
+
+            let p_clipped = painter.with_clip_rect(custom_clip.intersect(preview_rect));
+            render_single_media(&p_clipped, preview_rect, offset_px, vm, ctx, bg, current_t, scale_factor, alpha_mult);
         }
+    }
+
+    if dip_to_black_amount > 0.0 {
+        painter.rect_filled(preview_rect, 0.0, Color32::from_black_alpha((dip_to_black_amount * 255.0) as u8));
+    }
+    if dip_to_white_amount > 0.0 {
+        painter.rect_filled(preview_rect, 0.0, Color32::from_rgba_unmultiplied(255, 255, 255, (dip_to_white_amount * 255.0) as u8));
     }
 }
 
 fn render_single_media(
     painter: &egui::Painter,
     preview_rect: Rect,
+    offset_px: Vec2,
     vm: &mut EditorViewModel,
     ctx: &egui::Context,
     bg: &MediaFile,
@@ -159,8 +126,8 @@ fn render_single_media(
     let final_opacity = (state.opacity * alpha_multiplier).clamp(0.0, 1.0);
     if final_opacity <= 0.005 { return; }
 
-    let cx = preview_rect.center().x + state.x * scale_factor;
-    let cy = preview_rect.center().y + state.y * scale_factor;
+    let cx = preview_rect.center().x + state.x * scale_factor + offset_px.x;
+    let cy = preview_rect.center().y + state.y * scale_factor + offset_px.y;
     let rot = egui::emath::Rot2::from_angle(state.rotation.to_radians());
     let color = Color32::from_white_alpha((final_opacity * 255.0) as u8);
 
@@ -183,7 +150,7 @@ fn render_single_media(
         }
         mesh.add_triangle(0, 1, 2);
         mesh.add_triangle(0, 2, 3);
-        painter.with_clip_rect(preview_rect).add(mesh);
+        painter.add(mesh);
     };
 
     if let Some(col) = bg.color {
@@ -198,7 +165,7 @@ fn render_single_media(
         let center = Pos2::new(cx, cy);
         let pts = [ Pos2::new(-hw, -hh), Pos2::new(hw, -hh), Pos2::new(hw, hh), Pos2::new(-hw, hh) ];
         let rot_pts: Vec<Pos2> = pts.iter().map(|p| center + rot * p.to_vec2()).collect();
-        painter.with_clip_rect(preview_rect).add(egui::Shape::convex_polygon(rot_pts, egui_col, Stroke::NONE));
+        painter.add(egui::Shape::convex_polygon(rot_pts, egui_col, Stroke::NONE));
         
     } else if bg.media_type == MediaType::Image {
         if let Some(tex) = vm.get_or_load_texture(ctx, &bg.path) {

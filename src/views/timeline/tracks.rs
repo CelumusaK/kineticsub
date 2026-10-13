@@ -5,16 +5,15 @@ use crate::views::theme::{BG_PANEL, BORDER, TEXT_DIM, TEXT_BRIGHT, ACCENT_CYAN, 
 use super::{LABEL_W, RULER_H, TRACK_H};
 
 pub fn draw_track_labels(painter: &egui::Painter, origin: Pos2, tracks_rect: Rect, _vm: &EditorViewModel, _ui: &mut egui::Ui) {
-    painter.rect_filled(
-        Rect::from_min_size(origin, Vec2::new(LABEL_W, tracks_rect.height())),
-        0.0,
-        BG_PANEL,
+    let rect = Rect::from_min_size(
+        origin,
+        Vec2::new(LABEL_W, tracks_rect.height())
     );
+    painter.rect_filled(rect, 0.0, BG_PANEL);
     painter.line_segment([
-        Pos2::new(origin.x + LABEL_W, origin.y),
-        Pos2::new(origin.x + LABEL_W, origin.y + tracks_rect.height()),
-    ],
-    Stroke::new(1.0_f32, BORDER));
+        Pos2::new(rect.max.x, rect.min.y),
+        Pos2::new(rect.max.x, rect.max.y),
+    ], Stroke::new(1.0_f32, BORDER));
 }
 
 pub fn draw_track_lines(painter: &egui::Painter, origin: Pos2, tracks_rect: Rect, vm: &mut EditorViewModel, ui: &mut egui::Ui) {
@@ -58,13 +57,17 @@ pub fn draw_track_lines(painter: &egui::Painter, origin: Pos2, tracks_rect: Rect
                 vm.px_to_time(pos.x - (origin.x + LABEL_W)).clamp(0.0, vm.project.duration)
             }).unwrap_or(vm.current_time());
 
-            ui.label("✨ Transitions");
-            ui.separator();
-            for t in TransitionType::all() {
-                if ui.button(format!("Add {}", t.label())).clicked() {
-                    add_transition_action = Some((click_time, row, t.clone()));
-                    ui.close_menu();
+            if row > 0 {
+                ui.label("✨ Transitions");
+                ui.separator();
+                for t in TransitionType::all() {
+                    if ui.button(format!("Add {}", t.label())).clicked() {
+                        add_transition_action = Some((click_time, row, t.clone()));
+                        ui.close_menu();
+                    }
                 }
+            } else {
+                ui.label("Transitions cannot be added to subtitle tracks.");
             }
         });
 
@@ -111,7 +114,7 @@ pub fn draw_track_lines(painter: &egui::Painter, origin: Pos2, tracks_rect: Rect
         }
 
         let name = vm.get_track_name(row);
-        let (idx, is_audio) = vm.get_row_track(row);
+        let (_, is_audio) = vm.get_row_track(row);
 
         resp.context_menu(|ui| {
             ui.label(egui::RichText::new(&name).color(TEXT_BRIGHT).strong());
@@ -123,24 +126,25 @@ pub fn draw_track_lines(painter: &egui::Painter, origin: Pos2, tracks_rect: Rect
             }
             ui.separator();
             
-            if ui.button(egui::RichText::new(if is_audio { "➕ Add Audio Track Above" } else { "➕ Add Video Track Above" })).clicked() {
-                add_track_action = Some((row, true, is_audio));
-                ui.close_menu();
-            }
-            if ui.button(egui::RichText::new(if is_audio { "➕ Add Audio Track Below" } else { "➕ Add Video Track Below" })).clicked() {
-                add_track_action = Some((row, false, is_audio));
-                ui.close_menu();
-            }
-            if idx == 0 {
+            if row == 0 {
                 if ui.button(egui::RichText::new("➕ Add Video Track Below")).clicked() {
                     add_track_action = Some((row, false, false));
+                    ui.close_menu();
+                }
+            } else {
+                if ui.button(egui::RichText::new(if is_audio { "➕ Add Audio Track Above" } else { "➕ Add Video Track Above" })).clicked() {
+                    add_track_action = Some((row, true, is_audio));
+                    ui.close_menu();
+                }
+                if ui.button(egui::RichText::new(if is_audio { "➕ Add Audio Track Below" } else { "➕ Add Video Track Below" })).clicked() {
+                    add_track_action = Some((row, false, is_audio));
                     ui.close_menu();
                 }
             }
             
             ui.separator();
 
-            if idx == 0 {
+            if row == 0 {
                 ui.label(egui::RichText::new("The Subtitle track cannot be deleted.").color(TEXT_DIM).size(10.0));
             } else {
                 if ui.button(egui::RichText::new("🗑 Delete Track").color(ACCENT_AMBER)).clicked() {

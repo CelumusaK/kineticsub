@@ -47,11 +47,13 @@ pub struct EditorViewModel {
     pub selected_ids: HashSet<String>,
     pub selected_path_node: Option<usize>,
     pub selected_track: usize,
-    pub selected_keyframe_id: Option<String>,
+    pub selected_keyframe_ids: HashSet<String>,
 
     pub timeline_zoom: f32,
     pub timeline_scroll: f64,
     pub timeline_vertical_scroll: f32,
+    pub timeline_zoom_to_mouse: bool,
+    pub is_scrubbing: bool,
     
     // Graph Editor State
     pub graph_channel: GraphChannel,
@@ -120,10 +122,12 @@ impl EditorViewModel {
             selected_ids: HashSet::new(),
             selected_path_node: None,
             selected_track: 0,
-            selected_keyframe_id: None,
+            selected_keyframe_ids: HashSet::new(),
             timeline_zoom: 100.0,
             timeline_scroll: 0.0,
             timeline_vertical_scroll: 0.0,
+            timeline_zoom_to_mouse: true,
+            is_scrubbing: false,
             
             graph_channel: GraphChannel::X,
             graph_zoom_x: 200.0,
@@ -170,6 +174,83 @@ impl EditorViewModel {
         vm.project.ensure_tracks_initialized();
         vm.history.push(vm.project.clone());
         vm
+    }
+
+    pub fn resolve_all_overlaps(&mut self) {
+        let mut tracks_to_resolve = std::collections::HashSet::new();
+        for m in &self.project.media_files {
+            if m.on_timeline {
+                tracks_to_resolve.insert((m.track_index, m.media_type == MediaType::Audio));
+            }
+        }
+        
+        let mut iterations = 0;
+        while !tracks_to_resolve.is_empty() && iterations < 5 {
+            let mut next_tracks = std::collections::HashSet::new();
+            
+            for (track_index, is_audio) in tracks_to_resolve {
+                let mut indices: Vec<usize> = self.project.media_files.iter().enumerate()
+                    .filter(|(_, m)| m.on_timeline && m.track_index == track_index && (m.media_type == MediaType::Audio) == is_audio)
+                    .map(|(i, _)| i)
+                    .collect();
+                    
+                indices.sort_by(|&a, &b| {
+                    self.project.media_files[a].timeline_offset.partial_cmp(&self.project.media_files[b].timeline_offset).unwrap()
+                });
+
+                let mut cursor = 0.0;
+                let mut group_pushes: Vec<(String, f64)> = Vec::new();
+
+                for &idx in &indices {
+                    let m = &mut self.project.media_files[idx];
+                    if m.timeline_offset < cursor - 0.001 {
+                        let push_delta = cursor - m.timeline_offset;
+                        m.timeline_offset = cursor;
+                        m.has_collision = true;
+                        if let Some(ref gid) = m.group_id {
+                            group_pushes.push((gid.clone(), push_delta));
+                        }
+                    }
+                    cursor = m.timeline_offset + m.duration;
+                }
+
+                for (gid, delta) in group_pushes {
+                    for m in &mut self.project.media_files {
+                        if m.group_id.as_ref() == Some(&gid) {
+                            if m.track_index == track_index && (m.media_type == MediaType::Audio) == is_audio { continue; }
+                            m.timeline_offset += delta;
+                            next_tracks.insert((m.track_index, m.media_type == MediaType::Audio));
+                        }
+                    }
+                    for s in &mut self.project.subtitles {
+                        if s.group_id.as_ref() == Some(&gid) {
+                            s.timeline_start += delta;
+                            s.timeline_end += delta;
+                            s.has_collision = true;
+                        }
+                    }
+                }
+            }
+            tracks_to_resolve = next_tracks;
+            iterations += 1;
+        }
+
+        let mut sub_indices: Vec<usize> = (0..self.project.subtitles.len()).collect();
+        sub_indices.sort_by(|&a, &b| {
+            self.project.subtitles[a].timeline_start.partial_cmp(&self.project.subtitles[b].timeline_start).unwrap()
+        });
+
+        let mut sub_cursor = 0.0;
+        for &idx in &sub_indices {
+            let s = &mut self.project.subtitles[idx];
+            if s.timeline_start < sub_cursor - 0.001 {
+                let push_delta = sub_cursor - s.timeline_start;
+                s.timeline_start = sub_cursor;
+                s.timeline_end += push_delta;
+                s.has_collision = true;
+            }
+            sub_cursor = s.timeline_end;
+        }
     }
 
     pub fn total_tracks(&self) -> usize {
@@ -257,39 +338,20 @@ impl EditorViewModel {
     }
 
     pub fn is_transition_valid(&self, trans: &TransitionBlock) -> bool {
-        let mid = trans.timeline_start + (trans.duration * 0.5);
-        let mut has_out = false;
-        let mut has_in = false;
-
+        let t_start = trans.timeline_start;
+        let t_end = t_start + trans.duration;
         for m in &self.project.media_files {
             if m.on_timeline && m.media_type != MediaType::Audio {
-                if m.track_index == trans.track_index || trans.track_index == 0 {
-                    let end = m.timeline_offset + m.duration;
-                    if (end - mid).abs() <= trans.duration * 0.65 {
-                        has_out = true;
-                    }
-                    if (m.timeline_offset - mid).abs() <= trans.duration * 0.65 {
-                        has_in = true;
+                if trans.track_index == 0 || m.track_index == trans.track_index {
+                    let m_start = m.timeline_offset;
+                    let m_end = m.timeline_offset + m.duration;
+                    if t_start < m_end && t_end > m_start {
+                        return true;
                     }
                 }
             }
         }
-
-        if !(has_out && has_in) {
-            let mut f_out = false;
-            let mut f_in = false;
-            for m in &self.project.media_files {
-                if m.on_timeline && m.media_type != MediaType::Audio {
-                    let end = m.timeline_offset + m.duration;
-                    if (end - mid).abs() <= trans.duration * 0.65 { f_out = true; }
-                    if (m.timeline_offset - mid).abs() <= trans.duration * 0.65 { f_in = true; }
-                }
-            }
-            has_out = f_out;
-            has_in = f_in;
-        }
-
-        has_out && has_in
+        false
     }
 
     pub fn add_transition_at(&mut self, time: f64, track_index: usize, trans_type: TransitionType) {
@@ -525,15 +587,19 @@ impl EditorViewModel {
         let (id, is_audio) = self.get_row_track(row);
         if id == 0 { return; } 
         
-        self.project.media_files.retain(|m| !(m.track_index == id && (m.media_type == MediaType::Audio) == is_audio));
-        
         if is_audio {
-            if let Some(pos) = self.project.audio_track_order.iter().position(|&x| x == id) {
-                self.project.audio_track_order.remove(pos);
+            if self.project.audio_track_order.len() > 1 {
+                self.project.media_files.retain(|m| !(m.track_index == id && m.media_type == MediaType::Audio));
+                if let Some(pos) = self.project.audio_track_order.iter().position(|&x| x == id) {
+                    self.project.audio_track_order.remove(pos);
+                }
             }
         } else {
-            if let Some(pos) = self.project.video_track_order.iter().position(|&x| x == id) {
-                self.project.video_track_order.remove(pos);
+            if self.project.video_track_order.len() > 1 {
+                self.project.media_files.retain(|m| !(m.track_index == id && m.media_type != MediaType::Audio));
+                if let Some(pos) = self.project.video_track_order.iter().position(|&x| x == id) {
+                    self.project.video_track_order.remove(pos);
+                }
             }
         }
         self.mark_modified();
@@ -602,14 +668,6 @@ impl EditorViewModel {
             base_media.duration
         };
 
-        for m in &self.project.media_files {
-            if m.on_timeline && m.track_index == target_track_id && (m.media_type == MediaType::Audio) == is_audio_media {
-                if target_time < m.timeline_offset + m.duration && target_time + duration_to_place > m.timeline_offset {
-                    target_time = m.timeline_offset + m.duration;
-                }
-            }
-        }
-
         let pair_group_id = if base_media.media_type == MediaType::Video {
             Some(format!("group_{}", uuid::Uuid::new_v4()))
         } else {
@@ -661,6 +719,7 @@ impl EditorViewModel {
             self.selected_id = Some(drag_id);
         }
 
+        self.resolve_all_overlaps();
         self.update_duration();
         self.snapshot();
     }

@@ -302,6 +302,11 @@ pub fn draw_animate(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
         }
         vm.snapshot();
     }
+
+    ui.add_space(16.0);
+    ui.separator();
+    ui.add_space(8.0);
+    draw_animation_graph(ui, vm);
 }
 
 fn easing_to_handles(e: &Easing) -> [f32; 4] {
@@ -318,14 +323,13 @@ fn easing_to_handles(e: &Easing) -> [f32; 4] {
 }
 
 pub fn draw_animation_graph(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
-    // Keep active subtitle in sync whether playing OR scrubbing manually
     let active_info = vm.active_subtitle().map(|s| (s.id.clone(), !s.keyframes.is_empty()));
     if let Some((sub_id, has_kfs)) = active_info {
         if vm.selected_id.as_deref() != Some(&sub_id) && has_kfs {
             vm.selected_id = Some(sub_id.clone());
             vm.selected_ids.clear();
             vm.selected_ids.insert(sub_id);
-            vm.selected_keyframe_id = None;
+            vm.selected_keyframe_ids.clear();
         }
     }
 
@@ -345,46 +349,47 @@ pub fn draw_animation_graph(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
         return;
     }
 
-    ui.add_space(2.0);
-    ui.label(egui::RichText::new("ANIMATION GRAPH").color(TEXT_DIM).size(10.5).strong());
-    ui.add_space(2.0);
-
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("graph_channel")
-            .selected_text(match vm.graph_channel {
-                GraphChannel::X => "Position X",
-                GraphChannel::Y => "Position Y",
-                GraphChannel::Scale => "Scale",
-                GraphChannel::Rotation => "Rotation",
-                GraphChannel::Opacity => "Opacity",
-            })
-            .width(120.0)
-            .show_ui(ui, |ui| {
-                let mut switched = false;
-                if ui.selectable_value(&mut vm.graph_channel, GraphChannel::X, "Position X").clicked() { switched = true; }
-                if ui.selectable_value(&mut vm.graph_channel, GraphChannel::Y, "Position Y").clicked() { switched = true; }
-                if ui.selectable_value(&mut vm.graph_channel, GraphChannel::Scale, "Scale").clicked() { switched = true; }
-                if ui.selectable_value(&mut vm.graph_channel, GraphChannel::Rotation, "Rotation").clicked() { switched = true; }
-                if ui.selectable_value(&mut vm.graph_channel, GraphChannel::Opacity, "Opacity").clicked() { switched = true; }
-
-                if switched {
-                    match vm.graph_channel {
-                        GraphChannel::X | GraphChannel::Y => { vm.graph_zoom_y = 0.1; vm.graph_offset_y = 0.0; },
-                        GraphChannel::Scale => { vm.graph_zoom_y = 50.0; vm.graph_offset_y = 1.0; },
-                        GraphChannel::Rotation => { vm.graph_zoom_y = 0.5; vm.graph_offset_y = 0.0; },
-                        GraphChannel::Opacity => { vm.graph_zoom_y = 100.0; vm.graph_offset_y = 0.5; },
-                    }
-                }
-            });
-
+        ui.label(egui::RichText::new("ANIMATION GRAPH").color(TEXT_DIM).size(10.5).strong());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add(egui::Slider::new(&mut vm.graph_zoom_x, 10.0..=1000.0).text("Zoom").show_value(false));
+            if ui.button("⌖").on_hover_text("Center on Playhead").clicked() {
+                let view_w_secs = (ui.available_width() - 8.0) as f64 / vm.graph_zoom_x as f64;
+                vm.graph_scroll = (local_time - view_w_secs * 0.5).max(0.0);
+            }
         });
     });
 
+    ui.add_space(2.0);
+
+    egui::ComboBox::from_id_salt("graph_channel")
+        .selected_text(match vm.graph_channel {
+            GraphChannel::X => "Position X",
+            GraphChannel::Y => "Position Y",
+            GraphChannel::Scale => "Scale",
+            GraphChannel::Rotation => "Rotation",
+            GraphChannel::Opacity => "Opacity",
+        })
+        .width(120.0)
+        .show_ui(ui, |ui| {
+            let mut switched = false;
+            if ui.selectable_value(&mut vm.graph_channel, GraphChannel::X, "Position X").clicked() { switched = true; }
+            if ui.selectable_value(&mut vm.graph_channel, GraphChannel::Y, "Position Y").clicked() { switched = true; }
+            if ui.selectable_value(&mut vm.graph_channel, GraphChannel::Scale, "Scale").clicked() { switched = true; }
+            if ui.selectable_value(&mut vm.graph_channel, GraphChannel::Rotation, "Rotation").clicked() { switched = true; }
+            if ui.selectable_value(&mut vm.graph_channel, GraphChannel::Opacity, "Opacity").clicked() { switched = true; }
+
+            if switched {
+                match vm.graph_channel {
+                    GraphChannel::X | GraphChannel::Y => { vm.graph_zoom_y = 0.1; vm.graph_offset_y = 0.0; },
+                    GraphChannel::Scale => { vm.graph_zoom_y = 50.0; vm.graph_offset_y = 1.0; },
+                    GraphChannel::Rotation => { vm.graph_zoom_y = 0.5; vm.graph_offset_y = 0.0; },
+                    GraphChannel::Opacity => { vm.graph_zoom_y = 100.0; vm.graph_offset_y = 0.5; },
+                }
+            }
+        });
+
     ui.add_space(4.0);
 
-    // Fixed canvas avoiding unstable ScrollArea feedback loops
     let graph_size = egui::Vec2::new(ui.available_width() - 8.0, 160.0);
     let (resp, painter) = ui.allocate_painter(graph_size, egui::Sense::click_and_drag());
     let rect = resp.rect;
@@ -393,19 +398,19 @@ pub fn draw_animation_graph(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
     let view_w_secs = (rect.width() / vm.graph_zoom_x) as f64;
     let max_scroll = (dur - view_w_secs * 0.4).max(0.0);
 
-    // Smooth margin auto-scroll tracking like the timeline (playing OR manual movement)
     let margin = view_w_secs * 0.15;
-    if local_time > vm.graph_scroll + view_w_secs - margin {
-        vm.graph_scroll = (local_time - view_w_secs + margin).min(max_scroll);
-    } else if local_time < vm.graph_scroll + margin {
-        vm.graph_scroll = (local_time - margin).max(0.0);
+    if vm.is_playing() || vm.is_scrubbing {
+        if local_time > vm.graph_scroll + view_w_secs - margin {
+            vm.graph_scroll = (local_time - view_w_secs + margin).min(max_scroll);
+        } else if local_time < vm.graph_scroll + margin {
+            vm.graph_scroll = (local_time - margin).max(0.0);
+        }
     }
     vm.graph_scroll = vm.graph_scroll.clamp(0.0, max_scroll);
 
     p.rect_filled(rect, 3.0, BG_BASE);
     p.rect_stroke(rect, 3.0, egui::Stroke::new(1.0_f32, BORDER));
 
-    // Horizontal grid lines
     for i in 1..4 {
         let y = rect.top() + (i as f32 / 4.0) * rect.height();
         p.line_segment(
@@ -434,7 +439,6 @@ pub fn draw_animation_graph(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
         }
     };
 
-    // Draw curve across visible time window
     let steps = 120usize;
     let mut prev_pt: Option<egui::Pos2> = None;
     for step in 0..=steps {
@@ -463,20 +467,18 @@ pub fn draw_animation_graph(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
 
     let mut kf_interacted = false;
     let mut seek_target = None;
-    let mut modified_kf: Option<(String, f64, f32)> = None;
-    let mut changed_easing: Option<(String, Easing)> = None;
+    let mut modified_kf_delta: Option<(f64, f32)> = None;
+    let mut changed_easing_all: Option<Easing> = None;
     let mut modified_handles: Option<(String, [f32; 4])> = None;
 
-    // Draw Tangent Control Heads for explicitly tapped keyframe
-    if let Some(ref sel_id) = vm.selected_keyframe_id.clone() {
-        if let Some(sel_idx) = sorted.iter().position(|k| &k.id == sel_id) {
+    for sel_id in vm.selected_keyframe_ids.clone() {
+        if let Some(sel_idx) = sorted.iter().position(|k| k.id == sel_id) {
             let curr_kf = &sorted[sel_idx];
             let curr_val = get_kf_val(curr_kf);
             let curr_x = rect.min.x + ((curr_kf.time_offset - vm.graph_scroll) as f32 * vm.graph_zoom_x);
             let curr_y = (rect.center().y - (curr_val - vm.graph_offset_y) * vm.graph_zoom_y).clamp(rect.min.y + 6.0, rect.max.y - 6.0);
             let curr_pos = egui::pos2(curr_x, curr_y);
 
-            // 1. Incoming Tangent Handle (from previous keyframe)
             if sel_idx > 0 {
                 let prev_kf = &sorted[sel_idx - 1];
                 let prev_val = get_kf_val(prev_kf);
@@ -515,7 +517,6 @@ pub fn draw_animation_graph(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
                 }
             }
 
-            // 2. Outgoing Tangent Handle (to next keyframe)
             if sel_idx + 1 < sorted.len() {
                 let next_kf = &sorted[sel_idx + 1];
                 let next_val = get_kf_val(next_kf);
@@ -556,10 +557,9 @@ pub fn draw_animation_graph(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
         }
     }
 
-    // Draw Keyframe Points
     for kf in &sorted {
         let kx = rect.min.x + ((kf.time_offset - vm.graph_scroll) as f32 * vm.graph_zoom_x);
-        let is_selected_kf = vm.selected_keyframe_id.as_deref() == Some(&kf.id);
+        let is_selected_kf = vm.selected_keyframe_ids.contains(&kf.id);
 
         let val = get_kf_val(kf);
         let normalized_y = (val - vm.graph_offset_y) * vm.graph_zoom_y;
@@ -574,9 +574,17 @@ pub fn draw_animation_graph(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
                 kf_interacted = true;
             }
 
-            // Tapping a keyframe keeps it active; tapping another sets that one
             if kf_resp.clicked() {
-                vm.selected_keyframe_id = Some(kf.id.clone());
+                if ui.input(|i| i.modifiers.shift) {
+                    if is_selected_kf {
+                        vm.selected_keyframe_ids.remove(&kf.id);
+                    } else {
+                        vm.selected_keyframe_ids.insert(kf.id.clone());
+                    }
+                } else {
+                    vm.selected_keyframe_ids.clear();
+                    vm.selected_keyframe_ids.insert(kf.id.clone());
+                }
             }
 
             let color = if is_selected_kf {
@@ -591,52 +599,57 @@ pub fn draw_animation_graph(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
             p.circle_stroke(pos, if is_selected_kf { 7.0 } else { 5.5 }, egui::Stroke::new(1.0_f32, BG_BASE));
 
             if kf_resp.dragged() {
+                if !is_selected_kf {
+                    vm.selected_keyframe_ids.clear();
+                    vm.selected_keyframe_ids.insert(kf.id.clone());
+                }
                 let d = kf_resp.drag_delta();
                 let dt = (d.x / vm.graph_zoom_x) as f64;
                 let dy = -d.y / vm.graph_zoom_y;
+                modified_kf_delta = Some((dt, dy));
+            }
 
-                let new_t = (kf.time_offset + dt).clamp(0.0, dur);
-                let new_v = val + dy;
-                modified_kf = Some((kf.id.clone(), new_t, new_v));
+            if kf_resp.secondary_clicked() && !is_selected_kf {
+                vm.selected_keyframe_ids.clear();
+                vm.selected_keyframe_ids.insert(kf.id.clone());
             }
 
             kf_resp.context_menu(|ui| {
                 ui.label(egui::RichText::new("Keyframe Easing / Smoothing").strong());
                 ui.separator();
                 if ui.button("Linear").clicked() {
-                    changed_easing = Some((kf.id.clone(), Easing::Linear));
+                    changed_easing_all = Some(Easing::Linear);
                     ui.close_menu();
                 }
                 if ui.button("Cubic Out (Ease Out)").clicked() {
-                    changed_easing = Some((kf.id.clone(), Easing::EaseOut));
+                    changed_easing_all = Some(Easing::EaseOut);
                     ui.close_menu();
                 }
                 if ui.button("Cubic In (Ease In)").clicked() {
-                    changed_easing = Some((kf.id.clone(), Easing::EaseIn));
+                    changed_easing_all = Some(Easing::EaseIn);
                     ui.close_menu();
                 }
                 if ui.button("Cubic In/Out (Smooth)").clicked() {
-                    changed_easing = Some((kf.id.clone(), Easing::EaseInOut));
+                    changed_easing_all = Some(Easing::EaseInOut);
                     ui.close_menu();
                 }
                 ui.separator();
                 if ui.button("Bounce").clicked() {
-                    changed_easing = Some((kf.id.clone(), Easing::Bounce));
+                    changed_easing_all = Some(Easing::Bounce);
                     ui.close_menu();
                 }
                 if ui.button("Elastic").clicked() {
-                    changed_easing = Some((kf.id.clone(), Easing::Elastic));
+                    changed_easing_all = Some(Easing::Elastic);
                     ui.close_menu();
                 }
                 if ui.button("Back").clicked() {
-                    changed_easing = Some((kf.id.clone(), Easing::Back));
+                    changed_easing_all = Some(Easing::Back);
                     ui.close_menu();
                 }
             });
         }
     }
 
-    // Draw Playhead
     let ph_x = rect.min.x + ((local_time - vm.graph_scroll) as f32 * vm.graph_zoom_x);
     if ph_x >= rect.min.x && ph_x <= rect.max.x {
         p.line_segment(
@@ -654,9 +667,12 @@ pub fn draw_animation_graph(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
         ));
     }
 
-    // Playhead draggable head
     let ph_head_rect = Rect::from_min_size(egui::pos2(ph_x - 8.0, rect.min.y), Vec2::new(16.0, 16.0));
     let ph_head_resp = ui.interact(ph_head_rect, ui.id().with("graph_ph_head"), egui::Sense::click_and_drag());
+    
+    if ph_head_resp.drag_started() { vm.is_scrubbing = true; }
+    if ph_head_resp.drag_stopped() { vm.is_scrubbing = false; }
+    
     if ph_head_resp.dragged() {
         if let Some(pos) = ph_head_resp.interact_pointer_pos() {
             let t = vm.graph_scroll + ((pos.x - rect.min.x) / vm.graph_zoom_x) as f64;
@@ -664,25 +680,65 @@ pub fn draw_animation_graph(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
         }
     }
 
-    // Move Playhead on background click or drag without feedback jitter
     if !kf_interacted && !ph_head_resp.dragged() && (resp.dragged() || resp.clicked()) {
+        if resp.drag_started() { vm.is_scrubbing = true; }
+        if resp.drag_stopped() { vm.is_scrubbing = false; }
+        
         if let Some(pos) = resp.interact_pointer_pos() {
             let t = vm.graph_scroll + ((pos.x - rect.min.x) / vm.graph_zoom_x) as f64;
             seek_target = Some(start + t.clamp(0.0, dur));
         }
     }
 
-    // Smooth Alt + Scroll zoom and normal scroll panning
     if resp.hovered() {
-        ui.input(|i| {
-            let scroll = i.raw_scroll_delta;
-            if i.modifiers.alt && scroll.y != 0.0 {
-                vm.graph_zoom_x = (vm.graph_zoom_x + scroll.y * 0.35).clamp(10.0, 1000.0);
-            } else if (scroll.x != 0.0 || scroll.y != 0.0) && !i.modifiers.alt {
-                let pan = (scroll.x + scroll.y) as f64 / vm.graph_zoom_x as f64;
-                vm.graph_scroll = (vm.graph_scroll - pan).clamp(0.0, max_scroll);
+        let mut zoom_delta = 0.0;
+        let mut pan_delta = 0.0;
+
+        ui.input_mut(|i| {
+            let scroll_y = if i.raw_scroll_delta.y != 0.0 { i.raw_scroll_delta.y } else { i.smooth_scroll_delta.y };
+            let scroll_x = if i.raw_scroll_delta.x != 0.0 { i.raw_scroll_delta.x } else { i.smooth_scroll_delta.x };
+
+            if i.modifiers.alt && scroll_y != 0.0 {
+                zoom_delta = scroll_y;
+                i.raw_scroll_delta = egui::Vec2::ZERO;
+                i.smooth_scroll_delta = egui::Vec2::ZERO;
+                i.events.retain(|e| !matches!(e, egui::Event::MouseWheel { .. }));
+            } else if i.modifiers.shift && scroll_y != 0.0 {
+                pan_delta = scroll_y;
+                i.raw_scroll_delta = egui::Vec2::ZERO;
+                i.smooth_scroll_delta = egui::Vec2::ZERO;
+                i.events.retain(|e| !matches!(e, egui::Event::MouseWheel { .. }));
+            } else if scroll_x != 0.0 {
+                pan_delta = scroll_x;
+                i.raw_scroll_delta.x = 0.0;
+                i.smooth_scroll_delta.x = 0.0;
             }
         });
+
+        if zoom_delta != 0.0 {
+            let old_zoom = vm.graph_zoom_x;
+            vm.graph_zoom_x = (vm.graph_zoom_x + zoom_delta * 0.35).clamp(10.0, 1000.0);
+            if vm.graph_zoom_x != old_zoom {
+                let focus_time = if vm.timeline_zoom_to_mouse {
+                    if let Some(pos) = ui.ctx().pointer_hover_pos() {
+                        vm.graph_scroll + ((pos.x - rect.min.x) / old_zoom) as f64
+                    } else {
+                        local_time
+                    }
+                } else {
+                    local_time
+                };
+                
+                let px_old = (focus_time - vm.graph_scroll) * old_zoom as f64;
+                vm.graph_scroll = focus_time - (px_old / vm.graph_zoom_x as f64);
+            }
+        }
+        
+        if pan_delta != 0.0 {
+            let pan = pan_delta as f64 / vm.graph_zoom_x as f64;
+            vm.graph_scroll = (vm.graph_scroll - pan).max(0.0);
+        }
+
         if resp.dragged_by(egui::PointerButton::Middle) {
             vm.graph_offset_y += resp.drag_delta().y / vm.graph_zoom_y;
         }
@@ -702,30 +758,33 @@ pub fn draw_animation_graph(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
         vm.mark_modified();
     }
 
-    if let Some((id, t, v)) = modified_kf {
+    if let Some((dt, dy)) = modified_kf_delta {
         let ch = vm.graph_channel;
+        let selected_kfs = vm.selected_keyframe_ids.clone();
+        
         if let Some(sub) = vm.selected_subtitle_mut() {
-            if let Some(kf) = sub.keyframes.iter_mut().find(|k| k.id == id) {
-                kf.time_offset = t;
-                match ch {
-                    GraphChannel::X => kf.x = v,
-                    GraphChannel::Y => kf.y = v,
-                    GraphChannel::Scale => kf.scale = v,
-                    GraphChannel::Rotation => kf.rotation = v,
-                    GraphChannel::Opacity => kf.opacity = v,
+            for kf in sub.keyframes.iter_mut() {
+                if selected_kfs.contains(&kf.id) {
+                    kf.time_offset = (kf.time_offset + dt).clamp(0.0, dur);
+                    match ch {
+                        GraphChannel::X => kf.x += dy, GraphChannel::Y => kf.y += dy,
+                        GraphChannel::Scale => kf.scale += dy, GraphChannel::Rotation => kf.rotation += dy,
+                        GraphChannel::Opacity => kf.opacity += dy,
+                    }
                 }
             }
             sub.keyframes.sort_by(|a, b| a.time_offset.partial_cmp(&b.time_offset).unwrap());
         }
+        
         if let Some(m) = vm.selected_media_mut() {
-            if let Some(kf) = m.keyframes.iter_mut().find(|k| k.id == id) {
-                kf.time_offset = t;
-                match ch {
-                    GraphChannel::X => kf.x = v,
-                    GraphChannel::Y => kf.y = v,
-                    GraphChannel::Scale => kf.scale = v,
-                    GraphChannel::Rotation => kf.rotation = v,
-                    GraphChannel::Opacity => kf.opacity = v,
+            for kf in m.keyframes.iter_mut() {
+                if selected_kfs.contains(&kf.id) {
+                    kf.time_offset = (kf.time_offset + dt).clamp(0.0, dur);
+                    match ch {
+                        GraphChannel::X => kf.x += dy, GraphChannel::Y => kf.y += dy,
+                        GraphChannel::Scale => kf.scale += dy, GraphChannel::Rotation => kf.rotation += dy,
+                        GraphChannel::Opacity => kf.opacity += dy,
+                    }
                 }
             }
             m.keyframes.sort_by(|a, b| a.time_offset.partial_cmp(&b.time_offset).unwrap());
@@ -733,15 +792,21 @@ pub fn draw_animation_graph(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
         vm.mark_modified();
     }
 
-    if let Some((id, new_easing)) = changed_easing {
+    if let Some(new_easing) = changed_easing_all {
+        let selected_kfs = vm.selected_keyframe_ids.clone();
+        
         if let Some(sub) = vm.selected_subtitle_mut() {
-            if let Some(kf) = sub.keyframes.iter_mut().find(|k| k.id == id) {
-                kf.easing = new_easing.clone();
+            for kf in sub.keyframes.iter_mut() {
+                if selected_kfs.contains(&kf.id) {
+                    kf.easing = new_easing.clone();
+                }
             }
         }
         if let Some(m) = vm.selected_media_mut() {
-            if let Some(kf) = m.keyframes.iter_mut().find(|k| k.id == id) {
-                kf.easing = new_easing;
+            for kf in m.keyframes.iter_mut() {
+                if selected_kfs.contains(&kf.id) {
+                    kf.easing = new_easing.clone();
+                }
             }
         }
         vm.mark_modified();
@@ -751,7 +816,6 @@ pub fn draw_animation_graph(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
         vm.seek_to(t);
     }
 }
-
 
 fn draw_bezier_editor(ui: &mut egui::Ui, handles: &mut [f32; 4], kf_id: &str) -> bool {
     let mut changed = false;

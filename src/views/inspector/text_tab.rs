@@ -17,7 +17,13 @@ pub fn draw_text_props(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
                 s.text_fill_mode.clone(), s.text_fill_path.clone(),
                 s.additional_strokes_enabled, s.additional_strokes.clone(), s.bloom.clone()
             )),
-            None => return,
+            None => {
+                ui.add_space(16.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(egui::RichText::new("Text properties are only available for subtitles.").color(TEXT_DIM).size(11.0));
+                });
+                return;
+            },
         }
     };
 
@@ -51,8 +57,6 @@ pub fn draw_text_props(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
         text_changed = true; 
     }
 
-    ui.add_space(6.0);
-
     // ── FONT ──────────────────────────────────────────────────────────────────
     section_label(ui, "FONT");
     {
@@ -72,8 +76,6 @@ pub fn draw_text_props(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
         if ui.toggle_value(&mut italic, egui::RichText::new(" I ").italics().size(11.0)).changed() { style_changed = true; }
     });
 
-    ui.add_space(6.0);
-    
     // ── TEXT FILL / CLIPPING MASK ──────────────────────────────────────────────
     section_label(ui, "TEXT FILL / CLIPPING MASK");
     ui.horizontal(|ui| {
@@ -104,8 +106,6 @@ pub fn draw_text_props(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
         });
     }
 
-    ui.add_space(6.0);
-
     // ── TEXT WARPING (DEFORMERS) ──────────────────────────────────────────────
     section_label(ui, "TEXT WARPING (DEFORMERS)");
     ui.horizontal(|ui| {
@@ -125,7 +125,6 @@ pub fn draw_text_props(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
             if ui.add(egui::Slider::new(&mut text_deform_amount, -100.0..=100.0)).changed() { deform_changed = true; }
         });
     }
-    ui.add_space(6.0);
 
     // ── GRADIENT ──────────────────────────────────────────────────────────────
     collapsible_section(ui, "GRADIENT", &mut gradient_enabled, &mut grad_changed, |ui, changed| {
@@ -145,7 +144,6 @@ pub fn draw_text_props(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
         });
         ui.label(egui::RichText::new("Gradient flows fill → Color B").color(TEXT_DIM).size(9.5));
     });
-    ui.add_space(2.0);
 
     // ── STROKE ────────────────────────────────────────────────────────────────
     collapsible_section(ui, "PRIMARY STROKE", &mut stroke_enabled, &mut stroke_changed, |ui, changed| {
@@ -159,7 +157,6 @@ pub fn draw_text_props(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
         });
         *changed |= c1 | c2;
     });
-    ui.add_space(2.0);
 
     // ── MULTIPLE STROKES ──────────────────────────────────────────────────────
     collapsible_section(ui, "MULTIPLE STROKES", &mut additional_strokes_enabled, &mut extra_stroke_changed, |ui, changed| {
@@ -182,7 +179,6 @@ pub fn draw_text_props(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
             *changed = true;
         }
     });
-    ui.add_space(2.0);
 
     // ── SHADOW ────────────────────────────────────────────────────────────────
     collapsible_section(ui, "DROP SHADOW", &mut shadow_enabled, &mut shadow_changed, |ui, changed| {
@@ -207,7 +203,6 @@ pub fn draw_text_props(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
             if ui.color_edit_button_rgba_unmultiplied(&mut shadow_color).changed() { *changed = true; }
         });
     });
-    ui.add_space(2.0);
 
     // ── GLOW & BLOOM ──────────────────────────────────────────────────────────
     collapsible_section(ui, "GLOW & BLOOM ENGINE", &mut bloom.enabled, &mut bloom_changed, |ui, changed| {
@@ -218,7 +213,6 @@ pub fn draw_text_props(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
             if ui.color_edit_button_rgba_unmultiplied(&mut bloom.color).changed() { *changed = true; }
         });
     });
-    ui.add_space(2.0);
 
     // ── BACKGROUND BOX ────────────────────────────────────────────────────────
     collapsible_section(ui, "BACKGROUND BOX", &mut bg_box_enabled, &mut bg_box_changed, |ui, changed| {

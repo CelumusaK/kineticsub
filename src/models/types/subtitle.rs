@@ -256,6 +256,7 @@ pub struct Subtitle {
     #[serde(default)] pub motion_blur: f32,
     // Keyframes
     pub keyframes: Vec<Keyframe>,
+    #[serde(skip)] pub has_collision: bool,
 }
 
 fn default_stroke_width() -> f32 { 2.0 }
@@ -309,6 +310,7 @@ impl Subtitle {
             loop_mode: LoopMode::None, physics: PhysicsSettings::default(), expressions: Expressions::default(),
             letter_spacing: 0.0, text_align: TextAlign::Center, motion_blur: 0.0,
             keyframes: Vec::new(),
+            has_collision: false,
         }
     }
 

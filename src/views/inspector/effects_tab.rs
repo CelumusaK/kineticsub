@@ -7,7 +7,13 @@ use super::widgets::*;
 pub fn draw_effects(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
     let mut motion_blur = match vm.selected_subtitle() {
         Some(s) => s.motion_blur,
-        None => return,
+        None => {
+            ui.add_space(16.0);
+            ui.vertical_centered(|ui| {
+                ui.label(egui::RichText::new("Effects are currently only available for subtitles.").color(TEXT_DIM).size(11.0));
+            });
+            return;
+        }
     };
     
     let (mut m_type, mut m_invert, mut mc_x, mut mc_y, mut ms_w, mut ms_h, mut m_rot, mut m_feather,

@@ -1,6 +1,6 @@
-use egui::{Context, SidePanel};
+use egui::{Context, Frame, Margin, RichText, Rounding, ScrollArea, Separator, SidePanel, Stroke};
 use crate::viewmodels::editor_vm::EditorViewModel;
-use crate::views::theme::{BG_PANEL, BG_BASE, BORDER, TEXT_DIM, ACCENT_CYAN};
+use crate::views::theme::{BG_BASE, BG_PANEL, BG_SELECTED, BORDER, TEXT_BRIGHT, TEXT_DIM, TEXT_MUTED};
 
 pub mod animate_tab;
 pub mod text_tab;
@@ -26,78 +26,77 @@ pub enum InspectorTab {
 }
 
 pub fn draw(ctx: &Context, vm: &mut EditorViewModel, tab: &mut InspectorTab) {
-    let is_media = vm.selected_media().is_some();
-
-    if is_media && (*tab == InspectorTab::Text || *tab == InspectorTab::Words || *tab == InspectorTab::Animate || *tab == InspectorTab::Effects) {
-        *tab = InspectorTab::Transform;
-    }
-
     SidePanel::right("inspector_panel")
         .default_width(320.0)
         .width_range(280.0..=500.0)
         .resizable(true)
-        .frame(egui::Frame {
+        .frame(Frame {
             fill: BG_PANEL,
-            stroke: egui::Stroke::new(1.0_f32, BORDER),
+            stroke: Stroke::new(1.0, BORDER),
             ..Default::default()
         })
         .show(ctx, |ui| {
-            draw_tabs(ui, tab, is_media);
-            ui.add(egui::Separator::default().spacing(0.0));
+            draw_tabs(ui, tab);
+            ui.add(Separator::default().spacing(0.0));
             ui.add_space(4.0);
 
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                if vm.selected_id.is_none() {
-                    ui.add_space(24.0);
-                    ui.vertical_centered(|ui| {
-                        ui.label(egui::RichText::new("Nothing selected").color(TEXT_DIM).size(12.0));
-                        ui.label(egui::RichText::new("Click an item on the timeline").color(TEXT_DIM).size(11.0));
-                    });
-                } else {
-                    match *tab {
-                        InspectorTab::Transform => draw_transform(ui, vm, ctx),
-                        InspectorTab::Text      => draw_text_props(ui, vm),
-                        InspectorTab::Words     => draw_words(ui, vm),
-                        InspectorTab::Animate   => draw_animate(ui, vm),
-                        InspectorTab::Effects   => draw_effects(ui, vm),
+            let mut disable_scroll = false;
+            if *tab == InspectorTab::Animate {
+                ui.input(|i| {
+                    if i.modifiers.alt {
+                        disable_scroll = true;
                     }
-                }
-            });
+                });
+            }
+
+            ScrollArea::vertical()
+                .enable_scrolling(!disable_scroll)
+                .show(ui, |ui| {
+                    if vm.selected_id.is_none() {
+                        ui.add_space(32.0);
+                        ui.vertical_centered(|ui| {
+                            ui.label(RichText::new("No clip selected").color(TEXT_MUTED).size(12.0));
+                            ui.label(RichText::new("Select an element on the timeline to edit properties").color(TEXT_DIM).size(10.5));
+                        });
+                    } else {
+                        match *tab {
+                            InspectorTab::Transform => draw_transform(ui, vm, ctx),
+                            InspectorTab::Text      => draw_text_props(ui, vm),
+                            InspectorTab::Words     => draw_words(ui, vm),
+                            InspectorTab::Animate   => draw_animate(ui, vm),
+                            InspectorTab::Effects   => draw_effects(ui, vm),
+                        }
+                    }
+                });
         });
 }
 
-fn draw_tabs(ui: &mut egui::Ui, tab: &mut InspectorTab, is_media: bool) {
-    egui::Frame::none()
+fn draw_tabs(ui: &mut egui::Ui, tab: &mut InspectorTab) {
+    Frame::none()
         .fill(BG_BASE)
-        .inner_margin(egui::Margin::symmetric(10.0, 0.0))
+        .inner_margin(Margin::symmetric(8.0, 5.0))
         .show(ui, |ui| {
-            ui.set_min_height(28.0);
+            ui.set_min_height(32.0);
             
             ui.horizontal(|ui| {
-                tab_btn(ui, "TRN", *tab == InspectorTab::Transform, tab, InspectorTab::Transform);
-                
-                if !is_media {
-                    ui.add_space(2.0);
-                    tab_btn(ui, "TXT", *tab == InspectorTab::Text, tab, InspectorTab::Text);
-                    ui.add_space(2.0);
-                    tab_btn(ui, "WRD", *tab == InspectorTab::Words, tab, InspectorTab::Words);
-                    ui.add_space(2.0);
-                    tab_btn(ui, "ANI", *tab == InspectorTab::Animate, tab, InspectorTab::Animate);
-                    ui.add_space(2.0);
-                    tab_btn(ui, "FX", *tab == InspectorTab::Effects, tab, InspectorTab::Effects);
-                }
+                ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+                tab_btn(ui, "Transform", *tab == InspectorTab::Transform, tab, InspectorTab::Transform);
+                tab_btn(ui, "Text", *tab == InspectorTab::Text, tab, InspectorTab::Text);
+                tab_btn(ui, "Words", *tab == InspectorTab::Words, tab, InspectorTab::Words);
+                tab_btn(ui, "Animate", *tab == InspectorTab::Animate, tab, InspectorTab::Animate);
+                tab_btn(ui, "Effects", *tab == InspectorTab::Effects, tab, InspectorTab::Effects);
             });
         });
 }
 
 fn tab_btn(ui: &mut egui::Ui, label: &str, active: bool, tab: &mut InspectorTab, target: InspectorTab) {
-    let color = if active { ACCENT_CYAN } else { TEXT_DIM };
-    let resp = ui.add(egui::Label::new(egui::RichText::new(label).color(color).size(10.0).strong()).sense(egui::Sense::click()));
-    if active {
-        let r = resp.rect;
-        ui.painter().line_segment([egui::pos2(r.min.x, r.max.y + 1.0), egui::pos2(r.max.x, r.max.y + 1.0)],
-            egui::Stroke::new(2.0_f32, ACCENT_CYAN),
-        );
-    }
+    let color = if active { TEXT_BRIGHT } else { TEXT_DIM };
+    let bg_color = if active { BG_SELECTED } else { egui::Color32::TRANSPARENT };
+    let resp = ui.add(
+        egui::Button::new(RichText::new(label).color(color).size(11.0).strong())
+            .fill(bg_color)
+            .rounding(Rounding::same(4.0))
+            .stroke(Stroke::NONE)
+    );
     if resp.clicked() { *tab = target; }
 }

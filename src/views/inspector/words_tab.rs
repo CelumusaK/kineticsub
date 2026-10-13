@@ -8,7 +8,13 @@ pub fn draw_words(ui: &mut egui::Ui, vm: &mut EditorViewModel) {
     
     let sub = match vm.selected_subtitle_mut() {
         Some(s) => s,
-        None => return,
+        None => {
+            ui.add_space(16.0);
+            ui.vertical_centered(|ui| {
+                ui.label(egui::RichText::new("Word emphasis is only available for subtitles.").color(TEXT_DIM).size(11.0));
+            });
+            return;
+        }
     };
 
     if sub.words.is_empty() {

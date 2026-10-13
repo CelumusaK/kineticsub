@@ -25,6 +25,7 @@ pub fn draw_subtitle_blocks(
     let mut drag_ended = false;
     let mut do_group = false;
     let mut do_ungroup = false;
+    let mut clear_collisions = false;
 
     let selected_ids = vm.selected_ids.clone();
     let primary_id = vm.selected_id.clone();
@@ -61,7 +62,7 @@ pub fn draw_subtitle_blocks(
 
         let drag_state_id = ui.id().with(("sub_drag_mode", i));
         let mut drag_mode = ui.data(|d| d.get_temp::<u8>(drag_state_id).unwrap_or(0));
-        let handle_w = 14.0_f32.min(block_rect.width() * 0.45);
+        let handle_w = 14.0_f32.min(block_rect.width() * 0.4);
 
         let resp = ui.interact(
             interact_rect,
@@ -71,9 +72,12 @@ pub fn draw_subtitle_blocks(
 
         if resp.drag_started() {
             if let Some(pos) = resp.interact_pointer_pos() {
-                if pos.x <= block_rect.min.x + handle_w {
+                let dist_left = (pos.x - block_rect.min.x).abs();
+                let dist_right = (pos.x - block_rect.max.x).abs();
+                
+                if dist_left <= handle_w {
                     drag_mode = 1;
-                } else if pos.x >= block_rect.max.x - handle_w {
+                } else if dist_right <= handle_w {
                     drag_mode = 2;
                 } else {
                     drag_mode = 0;
@@ -85,7 +89,9 @@ pub fn draw_subtitle_blocks(
         if resp.hovered() && !resp.dragged() {
             *hovered_block = true;
             if let Some(pos) = ctx.pointer_hover_pos() {
-                if pos.x <= block_rect.min.x + handle_w || pos.x >= block_rect.max.x - handle_w {
+                let dist_left = (pos.x - block_rect.min.x).abs();
+                let dist_right = (pos.x - block_rect.max.x).abs();
+                if dist_left <= handle_w || dist_right <= handle_w {
                     ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeHorizontal);
                 } else {
                     ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
@@ -111,9 +117,11 @@ pub fn draw_subtitle_blocks(
                 sub_resize = Some((sub.id.clone(), drag_mode, dt));
             }
         }
+        
         if resp.drag_stopped() {
             ui.data_mut(|d| d.remove_temp::<u8>(drag_state_id));
             drag_ended = true;
+            clear_collisions = true;
         }
 
         resp.context_menu(|ui| {
@@ -136,20 +144,24 @@ pub fn draw_subtitle_blocks(
             }
         });
 
-        let fill = if is_primary {
+        let fill = if sub.has_collision {
+            egui::Color32::from_rgba_premultiplied(239, 68, 68, 120) // Red collision indicator
+        } else if is_primary {
             egui::Color32::from_rgba_premultiplied(34, 211, 238, 75)
         } else if is_selected {
             egui::Color32::from_rgba_premultiplied(34, 211, 238, 48)
         } else {
             egui::Color32::from_rgba_premultiplied(34, 211, 238, 26)
         };
-        let stroke_col = if is_primary { ACCENT_CYAN } else { ACCENT_CYAN_DIM };
+        let stroke_col = if sub.has_collision {
+            egui::Color32::from_rgb(252, 165, 165)
+        } else if is_primary { ACCENT_CYAN } else { ACCENT_CYAN_DIM };
 
         p.rect_filled(block_rect, 4.0, fill);
         p.rect_stroke(
             block_rect,
             4.0,
-            Stroke::new(if is_primary { 1.5_f32 } else { 1.0_f32 }, stroke_col),
+            Stroke::new(if is_primary || sub.has_collision { 1.5_f32 } else { 1.0_f32 }, stroke_col),
         );
 
         if resp.hovered() && block_w > 20.0 {
@@ -229,6 +241,11 @@ pub fn draw_subtitle_blocks(
                 ));
             }
         }
+    }
+    
+    if clear_collisions {
+        for m in &mut vm.project.media_files { m.has_collision = false; }
+        for s in &mut vm.project.subtitles { s.has_collision = false; }
     }
 
     if do_group { vm.group_selected(); }

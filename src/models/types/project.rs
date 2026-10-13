@@ -2,6 +2,13 @@ use serde::{Deserialize, Serialize};
 use super::animation::{Keyframe, InterpolatedState, LoopMode, Easing};
 use super::subtitle::Subtitle;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrackType {
+    Subtitle,
+    Video,
+    Audio,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum MediaType {
     #[default]
@@ -105,6 +112,8 @@ pub struct MediaFile {
 
     #[serde(default)] pub group_id: Option<String>,
     #[serde(default)] pub folder_id: Option<String>,
+    
+    #[serde(skip)] pub has_collision: bool,
 }
 
 fn default_zero() -> f32 { 0.0 }
@@ -171,9 +180,14 @@ pub struct Project {
     pub fps: u32,
 
     #[serde(default = "default_tracks")]
+    pub subtitle_track_order: Vec<usize>,
+    #[serde(default = "default_tracks")]
     pub video_track_order: Vec<usize>,
     #[serde(default = "default_tracks")]
     pub audio_track_order: Vec<usize>,
+
+    #[serde(default = "default_next_id")]
+    pub next_subtitle_id: usize,
     #[serde(default = "default_next_id")]
     pub next_video_id: usize,
     #[serde(default = "default_next_id")]
@@ -199,8 +213,10 @@ impl Default for Project {
             duration: 10.0,
             resolution: (1920, 1080),
             fps: 25,
+            subtitle_track_order: vec![1],
             video_track_order: vec![1],
             audio_track_order: vec![1],
+            next_subtitle_id: 2,
             next_video_id: 2,
             next_audio_id: 2,
             export_range: None,
@@ -210,6 +226,10 @@ impl Default for Project {
 
 impl Project {
     pub fn ensure_tracks_initialized(&mut self) {
+        if self.subtitle_track_order.is_empty() {
+            self.subtitle_track_order = vec![1];
+            self.next_subtitle_id = 2;
+        }
         if self.video_track_order.is_empty() {
             self.video_track_order = vec![1];
             self.next_video_id = 2;

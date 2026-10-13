@@ -65,7 +65,16 @@ impl WhisperModel {
 }
 
 pub fn get_models_dir() -> PathBuf {
-    std::env::temp_dir().join("kineticsub_models")
+    let base = if let Ok(val) = std::env::var("XDG_DATA_HOME") {
+        PathBuf::from(val)
+    } else if let Ok(val) = std::env::var("HOME") {
+        PathBuf::from(val).join(".local").join("share")
+    } else if let Ok(val) = std::env::var("APPDATA") {
+        PathBuf::from(val)
+    } else {
+        std::env::temp_dir()
+    };
+    base.join("kineticsub").join("models")
 }
 
 pub fn get_model_path(model: WhisperModel) -> PathBuf {
@@ -73,11 +82,14 @@ pub fn get_model_path(model: WhisperModel) -> PathBuf {
     if primary.exists() {
         return primary;
     }
-    // Also check legacy path
-    let legacy = std::env::temp_dir().join("models").join(format!("{}.bin", model.id()));
-    if legacy.exists() {
-        return legacy;
-    }
+    
+    // Fallbacks to check old temp locations just in case
+    let legacy1 = std::env::temp_dir().join("kineticsub_models").join(format!("ggml-{}.bin", model.id()));
+    if legacy1.exists() { return legacy1; }
+    
+    let legacy2 = std::env::temp_dir().join("models").join(format!("{}.bin", model.id()));
+    if legacy2.exists() { return legacy2; }
+    
     primary
 }
 
@@ -214,7 +226,6 @@ pub fn spawn_transcription(audio_path: String, model: WhisperModel, tx: mpsc::Se
     thread::spawn(move || {
         let model_path = get_model_path(model);
 
-        // Verification check: NEVER auto-download here
         if !is_model_downloaded(model) {
             let _ = tx.send(WhisperMessage::Error(format!(
                 "Whisper model '{}' is not downloaded. Open Settings (Edit -> Settings) to download it.",
