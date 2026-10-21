@@ -1,24 +1,41 @@
-use egui::{Pos2, Rect, Stroke, Vec2};
-use crate::models::types::TransitionType;
-use crate::viewmodels::editor_vm::EditorViewModel;
-use crate::views::theme::{BG_PANEL, BORDER, TEXT_DIM, TEXT_BRIGHT, ACCENT_CYAN, ACCENT_AMBER};
 use super::{LABEL_W, RULER_H, TRACK_H};
+use crate::models::types::{TrackType, TransitionType};
+use crate::viewmodels::editor_vm::EditorViewModel;
+use crate::views::theme::{ACCENT_AMBER, ACCENT_CYAN, BG_PANEL, BORDER, TEXT_BRIGHT, TEXT_DIM};
+use egui::{Pos2, Rect, Stroke, Vec2};
 
-pub fn draw_track_labels(painter: &egui::Painter, origin: Pos2, tracks_rect: Rect, _vm: &EditorViewModel, _ui: &mut egui::Ui) {
-    let rect = Rect::from_min_size(
-        origin,
-        Vec2::new(LABEL_W, tracks_rect.height())
-    );
+pub fn draw_track_labels(
+    painter: &egui::Painter,
+    origin: Pos2,
+    tracks_rect: Rect,
+    _vm: &EditorViewModel,
+    _ui: &mut egui::Ui,
+) {
+    let rect = Rect::from_min_size(origin, Vec2::new(LABEL_W, tracks_rect.height()));
     painter.rect_filled(rect, 0.0, BG_PANEL);
-    painter.line_segment([
-        Pos2::new(rect.max.x, rect.min.y),
-        Pos2::new(rect.max.x, rect.max.y),
-    ], Stroke::new(1.0_f32, BORDER));
+    painter.line_segment(
+        [
+            Pos2::new(rect.max.x, rect.min.y),
+            Pos2::new(rect.max.x, rect.max.y),
+        ],
+        Stroke::new(1.0_f32, BORDER),
+    );
 }
 
-pub fn draw_track_lines(painter: &egui::Painter, origin: Pos2, tracks_rect: Rect, vm: &mut EditorViewModel, ui: &mut egui::Ui) {
+pub fn draw_track_lines(
+    painter: &egui::Painter,
+    origin: Pos2,
+    tracks_rect: Rect,
+    vm: &mut EditorViewModel,
+    ui: &mut egui::Ui,
+) {
     let num_tracks = vm.total_tracks();
-    
+
+    // The painter is clipped to the visible track area (below the ruler). Use the
+    // same rect to clip hit-testing so scrolled-away rows never steal input from
+    // the ruler / toolbar.
+    let visible = painter.clip_rect();
+
     let mut swap_action = None;
     let mut delete_action = None;
     let mut add_track_action = None;
@@ -27,24 +44,46 @@ pub fn draw_track_lines(painter: &egui::Painter, origin: Pos2, tracks_rect: Rect
 
     for row in 0..num_tracks {
         let row_y = origin.y + RULER_H + (row as f32 * TRACK_H);
-        
-        let header_rect = Rect::from_min_size(
-            Pos2::new(origin.x, row_y),
-            Vec2::new(LABEL_W, TRACK_H),
-        );
+
+        // Skip rows that are scrolled completely out of view.
+        if row_y + TRACK_H < visible.min.y || row_y > visible.max.y {
+            continue;
+        }
+
+        let header_rect =
+            Rect::from_min_size(Pos2::new(origin.x, row_y), Vec2::new(LABEL_W, TRACK_H));
         let track_body_rect = Rect::from_min_size(
             Pos2::new(origin.x + LABEL_W, row_y),
             Vec2::new(tracks_rect.width() - LABEL_W, TRACK_H),
         );
 
         let is_selected = vm.selected_track == row;
-        
-        let resp = ui.interact(header_rect, ui.id().with(format!("track_hdr_{}", row)), egui::Sense::click_and_drag());
-        let body_resp = ui.interact(track_body_rect, ui.id().with(format!("track_bdy_{}", row)), egui::Sense::click());
-        
+
+        let header_hit = header_rect.intersect(visible);
+        let body_hit = track_body_rect.intersect(visible);
+        if !header_hit.is_positive() || !body_hit.is_positive() {
+            continue;
+        }
+
+        let resp = ui.interact(
+            header_hit,
+            ui.id().with(format!("track_hdr_{}", row)),
+            egui::Sense::click_and_drag(),
+        );
+        let body_resp = ui.interact(
+            body_hit,
+            ui.id().with(format!("track_bdy_{}", row)),
+            egui::Sense::click(),
+        );
+
+        let (_, track_type) = vm.get_row_track(row);
+
         if body_resp.clicked() {
             vm.selected_track = row;
-            if let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos().or(i.pointer.hover_pos())) {
+            if let Some(pos) = ui
+                .ctx()
+                .input(|i| i.pointer.interact_pos().or(i.pointer.hover_pos()))
+            {
                 let click_x = pos.x - (origin.x + LABEL_W);
                 let t = vm.px_to_time(click_x).clamp(0.0, vm.project.duration);
                 vm.seek_to(t);
@@ -52,12 +91,17 @@ pub fn draw_track_lines(painter: &egui::Painter, origin: Pos2, tracks_rect: Rect
         }
 
         body_resp.context_menu(|ui| {
-            let click_pos = ui.ctx().input(|i| i.pointer.interact_pos().or(i.pointer.hover_pos()));
-            let click_time = click_pos.map(|pos| {
-                vm.px_to_time(pos.x - (origin.x + LABEL_W)).clamp(0.0, vm.project.duration)
-            }).unwrap_or(vm.current_time());
+            let click_pos = ui
+                .ctx()
+                .input(|i| i.pointer.interact_pos().or(i.pointer.hover_pos()));
+            let click_time = click_pos
+                .map(|pos| {
+                    vm.px_to_time(pos.x - (origin.x + LABEL_W))
+                        .clamp(0.0, vm.project.duration)
+                })
+                .unwrap_or(vm.current_time());
 
-            if row > 0 {
+            if track_type != TrackType::Subtitle {
                 ui.label("✨ Transitions");
                 ui.separator();
                 for t in TransitionType::all() {
@@ -83,27 +127,41 @@ pub fn draw_track_lines(painter: &egui::Painter, origin: Pos2, tracks_rect: Rect
                 egui::Color32::from_rgba_unmultiplied(255, 255, 255, 3),
             );
         }
-        
+
         if resp.double_clicked() {
             select_all_track = Some(row);
         } else if resp.clicked() {
             vm.selected_track = row;
         }
 
-        if resp.dragged() && row > 0 {
+        let is_first_of_kind = match track_type {
+            TrackType::Subtitle => row == 0,
+            TrackType::Video => row == vm.project.subtitle_track_order.len(),
+            TrackType::Audio => {
+                row == vm.project.subtitle_track_order.len() + vm.project.video_track_order.len()
+            }
+        };
+
+        if resp.dragged() && !is_first_of_kind {
             ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
             if let Some(pos) = ui.ctx().pointer_hover_pos() {
                 let target_row = ((pos.y - (origin.y + RULER_H)) / TRACK_H).floor() as isize;
                 let target_row = target_row.clamp(1, vm.total_tracks() as isize - 1) as usize;
-                
-                let drop_y = origin.y + RULER_H + (target_row as f32 * TRACK_H);
-                painter.line_segment(
-                    [Pos2::new(origin.x, drop_y), Pos2::new(origin.x + tracks_rect.width(), drop_y)],
-                    Stroke::new(3.0_f32, ACCENT_CYAN)
-                );
+
+                let (_, target_type) = vm.get_row_track(target_row);
+                if target_type == track_type {
+                    let drop_y = origin.y + RULER_H + (target_row as f32 * TRACK_H);
+                    painter.line_segment(
+                        [
+                            Pos2::new(origin.x, drop_y),
+                            Pos2::new(origin.x + tracks_rect.width(), drop_y),
+                        ],
+                        Stroke::new(3.0_f32, ACCENT_CYAN),
+                    );
+                }
             }
         }
-        if resp.drag_stopped() && row > 0 {
+        if resp.drag_stopped() && !is_first_of_kind {
             if let Some(pos) = ui.ctx().pointer_hover_pos() {
                 let target_row = ((pos.y - (origin.y + RULER_H)) / TRACK_H).floor() as isize;
                 let target_row = target_row.clamp(1, vm.total_tracks() as isize - 1) as usize;
@@ -114,7 +172,6 @@ pub fn draw_track_lines(painter: &egui::Painter, origin: Pos2, tracks_rect: Rect
         }
 
         let name = vm.get_track_name(row);
-        let (_, is_audio) = vm.get_row_track(row);
 
         resp.context_menu(|ui| {
             ui.label(egui::RichText::new(&name).color(TEXT_BRIGHT).strong());
@@ -125,29 +182,41 @@ pub fn draw_track_lines(painter: &egui::Painter, origin: Pos2, tracks_rect: Rect
                 ui.close_menu();
             }
             ui.separator();
-            
-            if row == 0 {
-                if ui.button(egui::RichText::new("➕ Add Video Track Below")).clicked() {
-                    add_track_action = Some((row, false, false));
-                    ui.close_menu();
-                }
-            } else {
-                if ui.button(egui::RichText::new(if is_audio { "➕ Add Audio Track Above" } else { "➕ Add Video Track Above" })).clicked() {
-                    add_track_action = Some((row, true, is_audio));
-                    ui.close_menu();
-                }
-                if ui.button(egui::RichText::new(if is_audio { "➕ Add Audio Track Below" } else { "➕ Add Video Track Below" })).clicked() {
-                    add_track_action = Some((row, false, is_audio));
-                    ui.close_menu();
-                }
+
+            let type_str = match track_type {
+                TrackType::Subtitle => "Text Track",
+                TrackType::Video => "Video Track",
+                TrackType::Audio => "Audio Track",
+            };
+
+            if ui
+                .button(egui::RichText::new(format!("➕ Add {} Above", type_str)))
+                .clicked()
+            {
+                add_track_action = Some((row, true, track_type));
+                ui.close_menu();
             }
-            
+            if ui
+                .button(egui::RichText::new(format!("➕ Add {} Below", type_str)))
+                .clicked()
+            {
+                add_track_action = Some((row, false, track_type));
+                ui.close_menu();
+            }
+
             ui.separator();
 
-            if row == 0 {
-                ui.label(egui::RichText::new("The Subtitle track cannot be deleted.").color(TEXT_DIM).size(10.0));
+            if is_first_of_kind {
+                ui.label(
+                    egui::RichText::new(format!("Primary {} cannot be deleted.", type_str))
+                        .color(TEXT_DIM)
+                        .size(10.0),
+                );
             } else {
-                if ui.button(egui::RichText::new("🗑 Delete Track").color(ACCENT_AMBER)).clicked() {
+                if ui
+                    .button(egui::RichText::new("🗑 Delete Track").color(ACCENT_AMBER))
+                    .clicked()
+                {
                     delete_action = Some(row);
                     ui.close_menu();
                 }
@@ -161,12 +230,14 @@ pub fn draw_track_lines(painter: &egui::Painter, origin: Pos2, tracks_rect: Rect
             egui::FontId::proportional(10.5),
             if is_selected { ACCENT_CYAN } else { TEXT_DIM },
         );
-        
-        painter.line_segment([
-            Pos2::new(origin.x, row_y + TRACK_H),
-            Pos2::new(origin.x + tracks_rect.width(), row_y + TRACK_H),
-        ],
-        Stroke::new(1.0_f32, BORDER));
+
+        painter.line_segment(
+            [
+                Pos2::new(origin.x, row_y + TRACK_H),
+                Pos2::new(origin.x + tracks_rect.width(), row_y + TRACK_H),
+            ],
+            Stroke::new(1.0_f32, BORDER),
+        );
     }
 
     if let Some((time, row, t_type)) = add_transition_action {
@@ -176,8 +247,8 @@ pub fn draw_track_lines(painter: &egui::Painter, origin: Pos2, tracks_rect: Rect
     if let Some(row) = select_all_track {
         vm.select_all_on_track(row);
     }
-    if let Some((r, above, is_audio)) = add_track_action {
-        vm.add_track_row(r, above, Some(is_audio));
+    if let Some((r, above, track_type)) = add_track_action {
+        vm.add_track_row(r, above, track_type);
     }
     if let Some((r1, r2)) = swap_action {
         if r2 > 0 && r2 < num_tracks {

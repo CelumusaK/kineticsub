@@ -1,5 +1,5 @@
-use egui::{self, Color32, Margin, RichText, Rounding, Stroke};
 use crate::views::theme::{BG_HOVER, BORDER, TEXT_BRIGHT, TEXT_MUTED, TEXT_NORM};
+use egui::{self, Color32, Margin, RichText, Rounding, Stroke};
 
 pub fn section_label(ui: &mut egui::Ui, label: &str) {
     ui.add_space(8.0);
@@ -15,9 +15,15 @@ pub fn collapsible_section(
     body: impl FnOnce(&mut egui::Ui, &mut bool),
 ) {
     ui.horizontal(|ui| {
-        if ui.checkbox(enabled, RichText::new(label)
-            .color(if *enabled { TEXT_BRIGHT } else { TEXT_MUTED })
-            .size(10.5).strong()).changed()
+        if ui
+            .checkbox(
+                enabled,
+                RichText::new(label)
+                    .color(if *enabled { TEXT_BRIGHT } else { TEXT_MUTED })
+                    .size(10.5)
+                    .strong(),
+            )
+            .changed()
         {
             *outer_changed = true;
         }
@@ -25,7 +31,7 @@ pub fn collapsible_section(
     if *enabled {
         egui::Frame::none()
             .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 4))
-            .stroke(Stroke::new(1.0, BORDER))
+            .stroke(Stroke::new(1.0_f32, BORDER))
             .inner_margin(Margin::symmetric(10.0, 8.0))
             .rounding(Rounding::same(6.0))
             .show(ui, |ui| {
@@ -58,14 +64,22 @@ pub fn circle_dot_interact(ui: &mut egui::Ui, color: Color32) -> (bool, bool) {
     ui.painter().circle_filled(r.center(), 3.5, color);
     let mut add = false;
     let mut clear = false;
-    
+
     resp.context_menu(|ui| {
-        if ui.button("Add Keyframe").clicked() { add = true; ui.close_menu(); }
-        if ui.button("Clear All Keyframes").clicked() { clear = true; ui.close_menu(); }
+        if ui.button("Add Keyframe").clicked() {
+            add = true;
+            ui.close_menu();
+        }
+        if ui.button("Clear All Keyframes").clicked() {
+            clear = true;
+            ui.close_menu();
+        }
     });
 
-    if resp.clicked() { add = true; }
-    
+    if resp.clicked() {
+        add = true;
+    }
+
     (add, clear)
 }
 
@@ -74,7 +88,7 @@ pub fn align_btn(ui: &mut egui::Ui, icon: &str, tooltip: &str) -> egui::Response
         egui::Button::new(RichText::new(icon).size(11.5).color(TEXT_NORM))
             .fill(BG_HOVER)
             .rounding(Rounding::same(4.0))
-            .stroke(Stroke::new(1.0, BORDER))
+            .stroke(Stroke::new(1.0_f32, BORDER))
             .min_size(egui::Vec2::new(28.0, 24.0)),
     );
     resp.on_hover_text(tooltip)

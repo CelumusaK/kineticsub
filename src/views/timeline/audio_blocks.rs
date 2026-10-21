@@ -1,8 +1,8 @@
-use egui::{Context, Pos2, Rect, Stroke, Vec2};
-use crate::models::types::MediaType;
-use crate::viewmodels::editor_vm::{EditorViewModel, TranscribeMode};
-use crate::views::theme::{ACCENT_CYAN, ACCENT_AMBER, TEXT_BRIGHT, TEXT_DIM};
 use super::{LABEL_W, RULER_H, TRACK_H};
+use crate::models::types::{MediaType, TrackType};
+use crate::viewmodels::editor_vm::{EditorViewModel, TranscribeMode};
+use crate::views::theme::{ACCENT_AMBER, ACCENT_CYAN, TEXT_BRIGHT, TEXT_DIM};
+use egui::{Context, Pos2, Rect, Stroke, Vec2};
 
 pub fn draw_media_blocks(
     ui: &mut egui::Ui,
@@ -14,7 +14,7 @@ pub fn draw_media_blocks(
     ctx: &Context,
 ) {
     let view_start = vm.timeline_scroll;
-    let view_end   = view_start + (tracks_rect.width() - LABEL_W) as f64 / vm.timeline_zoom as f64;
+    let view_end = view_start + (tracks_rect.width() - LABEL_W) as f64 / vm.timeline_zoom as f64;
 
     let mut transcribe_id: Option<String> = None;
     let mut set_transcribe_mode: Option<TranscribeMode> = None;
@@ -26,17 +26,18 @@ pub fn draw_media_blocks(
     let mut do_group = false;
     let mut do_ungroup = false;
     let mut clear_collisions = false;
+    let mut kf_select_action: Option<(String, String)> = None;
 
     let track_clip = Rect::from_min_max(
         Pos2::new(origin.x + LABEL_W, tracks_rect.min.y),
-        tracks_rect.max
+        tracks_rect.max,
     );
     let p = painter.with_clip_rect(track_clip);
 
     let whisper_busy = vm.whisper_is_running();
     let selected_ids = vm.selected_ids.clone();
     let transcribing_id = vm.transcribing_media_id.clone();
-    
+
     let mut linked_sub_counts = std::collections::HashMap::new();
     for sub in &vm.project.subtitles {
         if let Some(mid) = &sub.media_id {
@@ -45,13 +46,21 @@ pub fn draw_media_blocks(
     }
 
     for (i, media) in vm.project.media_files.iter().enumerate() {
-        if !media.on_timeline { continue; }
-
-        if media.timeline_offset + media.duration <= view_start || media.timeline_offset >= view_end {
+        if !media.on_timeline {
             continue;
         }
-        
-        let row_idx = vm.get_track_row(media.track_index, media.media_type == MediaType::Audio);
+
+        if media.timeline_offset + media.duration <= view_start || media.timeline_offset >= view_end
+        {
+            continue;
+        }
+
+        let track_type = if media.media_type == MediaType::Audio {
+            TrackType::Audio
+        } else {
+            TrackType::Video
+        };
+        let row_idx = vm.get_track_row(media.track_index, track_type);
         let row_y = origin.y + RULER_H + (row_idx as f32 * TRACK_H);
 
         let block_x = origin.x + LABEL_W + vm.time_to_px(media.timeline_offset);
@@ -63,7 +72,9 @@ pub fn draw_media_blocks(
         );
 
         let interact_rect = rect.intersect(track_clip);
-        if !interact_rect.is_positive() { continue; }
+        if !interact_rect.is_positive() {
+            continue;
+        }
 
         let id = &media.id;
         let is_selected = selected_ids.contains(id.as_str());
@@ -82,22 +93,26 @@ pub fn draw_media_blocks(
             ui.id().with(format!("media_{}", id)),
             egui::Sense::click_and_drag(),
         );
-        
+
         if resp.drag_started() {
             if let Some(pos) = resp.interact_pointer_pos() {
                 let dist_left = (pos.x - rect.min.x).abs();
                 let dist_right = (pos.x - rect.max.x).abs();
-                
-                if dist_left <= handle_width { drag_mode = 1; }
-                else if dist_right <= handle_width { drag_mode = 2; }
-                else { drag_mode = 0; }
+
+                if dist_left <= handle_width {
+                    drag_mode = 1;
+                } else if dist_right <= handle_width {
+                    drag_mode = 2;
+                } else {
+                    drag_mode = 0;
+                }
                 ui.data_mut(|d| d.insert_temp(drag_state_id, drag_mode));
             }
             if !is_selected || is_grouped {
                 selection_action = Some((id.clone(), false, row_idx, media.timeline_offset));
             }
         }
-        
+
         if resp.hovered() && !resp.dragged() {
             *hovered_block = true;
             if let Some(pos) = ctx.pointer_hover_pos() {
@@ -110,32 +125,34 @@ pub fn draw_media_blocks(
                 }
             }
         }
-        
+
         if resp.clicked() {
             let shift = ctx.input(|inp| inp.modifiers.shift);
             let click_pos = ctx.input(|inp| inp.pointer.interact_pos().or(inp.pointer.hover_pos()));
-            let seek_time = click_pos.map(|pos| {
-                vm.px_to_time(pos.x - (origin.x + LABEL_W)).clamp(0.0, vm.project.duration)
-            }).unwrap_or(media.timeline_offset);
+            let seek_time = click_pos
+                .map(|pos| {
+                    vm.px_to_time(pos.x - (origin.x + LABEL_W))
+                        .clamp(0.0, vm.project.duration)
+                })
+                .unwrap_or(media.timeline_offset);
             selection_action = Some((id.clone(), shift, row_idx, seek_time));
         }
 
         if resp.dragged() {
             let dt = resp.drag_delta().x as f64 / vm.timeline_zoom as f64;
             if drag_mode == 0 {
-                let pointer_y = ctx.pointer_hover_pos().unwrap().y;
+                let pointer_y = ctx.pointer_hover_pos().map(|p| p.y).unwrap_or(row_y);
                 let target_row = ((pointer_y - (origin.y + RULER_H)) / TRACK_H).floor() as isize;
                 let clamped_row = target_row.clamp(1, vm.total_tracks() as isize - 1) as usize;
                 let row_delta = clamped_row as isize - row_idx as isize;
-                let (target_track, _) = vm.get_row_track(clamped_row);
 
                 let is_multi = is_selected && selected_ids.len() > 1;
-                drag_info = Some((i, dt, is_multi, target_track, row_delta));
+                drag_info = Some((i, dt, is_multi, clamped_row, row_delta));
             } else {
                 media_resize = Some((id.clone(), drag_mode, dt));
             }
         }
-        
+
         if resp.drag_stopped() {
             ui.data_mut(|d| d.remove_temp::<u8>(drag_state_id));
             clear_collisions = true;
@@ -145,9 +162,16 @@ pub fn draw_media_blocks(
             ui.set_min_width(180.0);
 
             let mut display_name: String = media.name.chars().take(24).collect();
-            if media.name.len() > display_name.len() { display_name.push('…'); }
+            if media.name.len() > display_name.len() {
+                display_name.push('…');
+            }
 
-            ui.label(egui::RichText::new(&display_name).color(TEXT_BRIGHT).size(11.0).strong());
+            ui.label(
+                egui::RichText::new(&display_name)
+                    .color(TEXT_BRIGHT)
+                    .size(11.0)
+                    .strong(),
+            );
             ui.separator();
 
             if selected_ids.len() > 1 {
@@ -165,28 +189,51 @@ pub fn draw_media_blocks(
             ui.separator();
 
             if media.media_type == MediaType::Audio {
-                let transcribe_label = if is_transcribing { "⟳  Transcribing…" } else if has_transcription { "🎙  Re-transcribe" } else { "🎙  Transcribe" };
+                let transcribe_label = if is_transcribing {
+                    "⟳  Transcribing…"
+                } else if has_transcription {
+                    "🎙  Re-transcribe"
+                } else {
+                    "🎙  Transcribe"
+                };
 
                 ui.add_enabled_ui(!whisper_busy, |ui| {
-                    ui.menu_button(egui::RichText::new(transcribe_label).color(ACCENT_CYAN).size(11.0), |ui| {
-                        if ui.button("As Words").clicked() {
-                            set_transcribe_mode = Some(TranscribeMode::Word);
-                            transcribe_id = Some(id.clone());
-                            ui.close_menu();
-                        }
-                        if ui.button("As Phrases").clicked() {
-                            set_transcribe_mode = Some(TranscribeMode::Phrase);
-                            transcribe_id = Some(id.clone());
-                            ui.close_menu();
-                        }
-                    });
+                    ui.menu_button(
+                        egui::RichText::new(transcribe_label)
+                            .color(ACCENT_CYAN)
+                            .size(11.0),
+                        |ui| {
+                            if ui.button("As Words").clicked() {
+                                set_transcribe_mode = Some(TranscribeMode::Word);
+                                transcribe_id = Some(id.clone());
+                                ui.close_menu();
+                            }
+                            if ui.button("As Phrases").clicked() {
+                                set_transcribe_mode = Some(TranscribeMode::Phrase);
+                                transcribe_id = Some(id.clone());
+                                ui.close_menu();
+                            }
+                        },
+                    );
                 });
 
                 if has_transcription {
                     ui.separator();
-                    ui.label(egui::RichText::new(format!("{} subtitle(s) linked", linked_count)).color(TEXT_DIM).size(10.0));
+                    ui.label(
+                        egui::RichText::new(format!("{} subtitle(s) linked", linked_count))
+                            .color(TEXT_DIM)
+                            .size(10.0),
+                    );
 
-                    if ui.add(egui::Button::new(egui::RichText::new("✖  Remove Transcription").color(ACCENT_AMBER)).fill(egui::Color32::TRANSPARENT)).clicked() {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("✖  Remove Transcription").color(ACCENT_AMBER),
+                            )
+                            .fill(egui::Color32::TRANSPARENT),
+                        )
+                        .clicked()
+                    {
                         delete_linked = Some(id.clone());
                         ui.close_menu();
                     }
@@ -194,16 +241,19 @@ pub fn draw_media_blocks(
             }
 
             ui.separator();
-            if ui.button(egui::RichText::new("🗑 Delete from Timeline").color(ACCENT_AMBER)).clicked() {
+            if ui
+                .button(egui::RichText::new("🗑 Delete from Timeline").color(ACCENT_AMBER))
+                .clicked()
+            {
                 block_delete = Some(id.clone());
                 ui.close_menu();
             }
         });
 
         let block_col = if is_transcribing {
-            egui::Color32::from_rgba_unmultiplied(34, 211, 238, 35) 
+            egui::Color32::from_rgba_unmultiplied(34, 211, 238, 35)
         } else if media.has_collision {
-            egui::Color32::from_rgba_unmultiplied(239, 68, 68, 120) // Red collision indicator
+            egui::Color32::from_rgba_unmultiplied(239, 68, 68, 120)
         } else if media.media_type == MediaType::Video {
             egui::Color32::from_rgba_unmultiplied(200, 50, 100, 45)
         } else if media.media_type == MediaType::Image {
@@ -211,17 +261,35 @@ pub fn draw_media_blocks(
         } else {
             egui::Color32::from_rgba_unmultiplied(245, 158, 11, 45)
         };
-        
+
         p.rect_filled(rect, 3.0, block_col);
 
-        let border_col = if is_transcribing { ACCENT_CYAN } 
-            else if media.has_collision { egui::Color32::from_rgb(252, 165, 165) }
-            else if is_selected { ACCENT_CYAN }
-            else if media.media_type == MediaType::Video { egui::Color32::from_rgb(220, 80, 130) } 
-            else if media.media_type == MediaType::Image { egui::Color32::from_rgb(80, 180, 220) } 
-            else { ACCENT_AMBER };
-            
-        p.rect_stroke(rect, 3.0, Stroke::new(if is_transcribing || is_selected || media.has_collision { 2.0_f32 } else { 1.0_f32 }, border_col));
+        let border_col = if is_transcribing {
+            ACCENT_CYAN
+        } else if media.has_collision {
+            egui::Color32::from_rgb(252, 165, 165)
+        } else if is_selected {
+            ACCENT_CYAN
+        } else if media.media_type == MediaType::Video {
+            egui::Color32::from_rgb(220, 80, 130)
+        } else if media.media_type == MediaType::Image {
+            egui::Color32::from_rgb(80, 180, 220)
+        } else {
+            ACCENT_AMBER
+        };
+
+        p.rect_stroke(
+            rect,
+            3.0,
+            Stroke::new(
+                if is_transcribing || is_selected || media.has_collision {
+                    2.0_f32
+                } else {
+                    1.0_f32
+                },
+                border_col,
+            ),
+        );
 
         if media.media_type == MediaType::Audio || media.media_type == MediaType::Video {
             let stripe_spacing = 6.0;
@@ -229,8 +297,12 @@ pub fn draw_media_blocks(
             while sx < rect.max.x - 2.0 {
                 let h = (((sx * 0.3).sin() * 0.5 + 0.5) * (rect.height() * 0.6)) as f32;
                 let cy = rect.center().y;
-                p.line_segment([Pos2::new(sx, cy - h * 0.5), Pos2::new(sx, cy + h * 0.5)],
-                    Stroke::new(1.0_f32, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 30)),
+                p.line_segment(
+                    [Pos2::new(sx, cy - h * 0.5), Pos2::new(sx, cy + h * 0.5)],
+                    Stroke::new(
+                        1.0_f32,
+                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 30),
+                    ),
                 );
                 sx += stripe_spacing;
             }
@@ -238,7 +310,13 @@ pub fn draw_media_blocks(
 
         if is_grouped {
             let link_pos = Pos2::new(rect.min.x + 3.0, rect.min.y + 1.0);
-            p.text(link_pos, egui::Align2::LEFT_TOP, "🔗", egui::FontId::proportional(8.0), ACCENT_CYAN);
+            p.text(
+                link_pos,
+                egui::Align2::LEFT_TOP,
+                "🔗",
+                egui::FontId::proportional(8.0),
+                ACCENT_CYAN,
+            );
         }
 
         if has_transcription {
@@ -247,7 +325,9 @@ pub fn draw_media_blocks(
         }
 
         let mut short_name: String = media.name.chars().take(14).collect();
-        if media.name.len() > short_name.len() { short_name.push('…'); }
+        if media.name.len() > short_name.len() {
+            short_name.push('…');
+        }
         let label_text = format!("{} {:.1}s", short_name, media.duration);
 
         let mut clip_rect = rect.intersect(track_clip);
@@ -265,33 +345,41 @@ pub fn draw_media_blocks(
         if media.duration > 0.0 && block_w > 10.0 {
             for kf in &media.keyframes {
                 let kf_t = kf.time_offset;
-                if kf_t < 0.0 || kf_t > media.duration { continue; }
+                if kf_t < 0.0 || kf_t > media.duration {
+                    continue;
+                }
                 let kf_frac = kf_t / media.duration;
-                let kf_x    = rect.min.x + kf_frac as f32 * rect.width();
-                
-                if kf_x < track_clip.min.x || kf_x > track_clip.max.x { continue; }
+                let kf_x = rect.min.x + kf_frac as f32 * rect.width();
 
-                let kf_pos  = Pos2::new(kf_x, rect.max.y - 4.0);
-                let d       = 3.5f32;
-                
-                let kf_rect = Rect::from_center_size(kf_pos, Vec2::splat(d * 2.5));
-                let kf_resp = ui.interact(kf_rect, ui.id().with(("kf_med", &media.id, kf_t.to_bits())), egui::Sense::click());
-                if kf_resp.clicked() {
-                    let click_pos = ctx.input(|inp| inp.pointer.interact_pos().or(inp.pointer.hover_pos()));
-                    let seek_time = click_pos.map(|pos| {
-                        vm.px_to_time(pos.x - (origin.x + LABEL_W)).clamp(0.0, vm.project.duration)
-                    }).unwrap_or(media.timeline_offset + kf_t);
-                    selection_action = Some((media.id.clone(), false, row_idx, seek_time));
+                if kf_x < track_clip.min.x || kf_x > track_clip.max.x {
+                    continue;
                 }
 
-                let kf_color = if kf_resp.hovered() { egui::Color32::WHITE } else { egui::Color32::from_rgb(34, 211, 238) };
+                let kf_pos = Pos2::new(kf_x, rect.max.y - 4.0);
+                let d = 3.5f32;
+
+                let kf_rect = Rect::from_center_size(kf_pos, Vec2::splat(d * 2.5));
+                let kf_resp = ui.interact(
+                    kf_rect,
+                    ui.id().with(("kf_med", &media.id, kf_t.to_bits())),
+                    egui::Sense::click(),
+                );
+                if kf_resp.clicked() {
+                    kf_select_action = Some((media.id.clone(), kf.id.clone()));
+                }
+
+                let kf_color = if kf_resp.hovered() {
+                    egui::Color32::WHITE
+                } else {
+                    egui::Color32::from_rgb(34, 211, 238)
+                };
 
                 p.add(egui::Shape::convex_polygon(
                     vec![
-                        Pos2::new(kf_pos.x,     kf_pos.y - d),
-                        Pos2::new(kf_pos.x + d, kf_pos.y    ),
-                        Pos2::new(kf_pos.x,     kf_pos.y + d),
-                        Pos2::new(kf_pos.x - d, kf_pos.y    ),
+                        Pos2::new(kf_pos.x, kf_pos.y - d),
+                        Pos2::new(kf_pos.x + d, kf_pos.y),
+                        Pos2::new(kf_pos.x, kf_pos.y + d),
+                        Pos2::new(kf_pos.x - d, kf_pos.y),
                     ],
                     kf_color,
                     Stroke::NONE,
@@ -299,14 +387,28 @@ pub fn draw_media_blocks(
             }
         }
     }
-    
+
     if clear_collisions {
-        for m in &mut vm.project.media_files { m.has_collision = false; }
-        for s in &mut vm.project.subtitles { s.has_collision = false; }
+        for m in &mut vm.project.media_files {
+            m.has_collision = false;
+        }
+        for s in &mut vm.project.subtitles {
+            s.has_collision = false;
+        }
     }
 
-    if do_group { vm.group_selected(); }
-    if do_ungroup { vm.ungroup_selected(); }
+    if do_group {
+        vm.group_selected();
+    }
+    if do_ungroup {
+        vm.ungroup_selected();
+    }
+
+    if let Some((med_id, kf_id)) = kf_select_action {
+        vm.select_with_group(&med_id);
+        vm.selected_keyframe_ids.clear();
+        vm.selected_keyframe_ids.insert(kf_id);
+    }
 
     if let Some((id, mode, dt)) = media_resize {
         vm.resize_media_clip(&id, mode, dt);
@@ -322,17 +424,26 @@ pub fn draw_media_blocks(
         }
     }
 
-    if let Some(mode) = set_transcribe_mode { vm.transcribe_mode = mode; }
-    if let Some(id) = transcribe_id { vm.start_auto_transcription(id); }
-    if let Some(id) = delete_linked { vm.project.subtitles.retain(|s| s.media_id.as_deref() != Some(id.as_str())); vm.update_duration(); }
-    if let Some(id) = block_delete { 
+    if let Some(mode) = set_transcribe_mode {
+        vm.transcribe_mode = mode;
+    }
+    if let Some(id) = transcribe_id {
+        vm.start_auto_transcription(id);
+    }
+    if let Some(id) = delete_linked {
+        vm.project
+            .subtitles
+            .retain(|s| s.media_id.as_deref() != Some(id.as_str()));
+        vm.update_duration();
+    }
+    if let Some(id) = block_delete {
         if let Some(m) = vm.project.media_files.iter_mut().find(|m| m.id == id) {
             m.on_timeline = false;
         }
-        vm.update_duration(); 
+        vm.update_duration();
     }
-    
-    if let Some((i, dt, multi, track, row_delta)) = drag_info { 
+
+    if let Some((i, dt, multi, target_row, row_delta)) = drag_info {
         if multi {
             vm.move_selected_items(dt);
             if row_delta != 0 {
@@ -342,7 +453,7 @@ pub fn draw_media_blocks(
                 }
             }
         } else {
-            vm.move_media(i, dt, track); 
+            vm.move_media(i, dt, target_row);
         }
     }
 }

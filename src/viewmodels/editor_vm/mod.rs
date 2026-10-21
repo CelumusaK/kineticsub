@@ -7,7 +7,7 @@ use std::collections::{HashSet, HashMap};
 use std::sync::mpsc;
 use crate::models::{
     sync_engine::SyncEngine,
-    types::{Project, RenderMode, MediaType, TransitionBlock, TransitionType},
+    types::{Project, RenderMode, MediaType, TransitionBlock, TransitionType, TrackType},
 };
 use crate::services::whisper_service::{
     spawn_download_model, ModelDownloadMessage, WhisperMessage, WhisperModel,
@@ -177,6 +177,7 @@ impl EditorViewModel {
     }
 
     pub fn resolve_all_overlaps(&mut self) {
+        // Resolve Overlaps for Media (Video/Audio)
         let mut tracks_to_resolve = std::collections::HashSet::new();
         for m in &self.project.media_files {
             if m.on_timeline {
@@ -235,37 +236,88 @@ impl EditorViewModel {
             iterations += 1;
         }
 
-        let mut sub_indices: Vec<usize> = (0..self.project.subtitles.len()).collect();
-        sub_indices.sort_by(|&a, &b| {
-            self.project.subtitles[a].timeline_start.partial_cmp(&self.project.subtitles[b].timeline_start).unwrap()
-        });
+        // Resolve Overlaps for Subtitle Tracks
+        let mut sub_tracks = std::collections::HashSet::new();
+        for s in &self.project.subtitles {
+            sub_tracks.insert(s.track_index);
+        }
 
-        let mut sub_cursor = 0.0;
-        for &idx in &sub_indices {
-            let s = &mut self.project.subtitles[idx];
-            if s.timeline_start < sub_cursor - 0.001 {
-                let push_delta = sub_cursor - s.timeline_start;
-                s.timeline_start = sub_cursor;
-                s.timeline_end += push_delta;
-                s.has_collision = true;
+        for track_id in sub_tracks {
+            let mut sub_indices: Vec<usize> = self.project.subtitles.iter().enumerate()
+                .filter(|(_, s)| s.track_index == track_id)
+                .map(|(i, _)| i)
+                .collect();
+                
+            sub_indices.sort_by(|&a, &b| {
+                self.project.subtitles[a].timeline_start.partial_cmp(&self.project.subtitles[b].timeline_start).unwrap()
+            });
+
+            let mut sub_cursor = 0.0;
+            for &idx in &sub_indices {
+                let s = &mut self.project.subtitles[idx];
+                if s.timeline_start < sub_cursor - 0.001 {
+                    let push_delta = sub_cursor - s.timeline_start;
+                    s.timeline_start = sub_cursor;
+                    s.timeline_end += push_delta;
+                    s.has_collision = true;
+                }
+                sub_cursor = s.timeline_end;
             }
-            sub_cursor = s.timeline_end;
         }
     }
 
     pub fn total_tracks(&self) -> usize {
-        1 + self.project.video_track_order.len() + self.project.audio_track_order.len()
+        self.project.subtitle_track_order.len() + self.project.video_track_order.len() + self.project.audio_track_order.len()
+    }
+
+    pub fn get_track_row(&self, track_index: usize, track_type: TrackType) -> usize {
+        let s_len = self.project.subtitle_track_order.len();
+        let v_len = self.project.video_track_order.len();
+        match track_type {
+            TrackType::Subtitle => self.project.subtitle_track_order.iter().position(|&id| id == track_index).unwrap_or(0),
+            TrackType::Video => s_len + self.project.video_track_order.iter().position(|&id| id == track_index).unwrap_or(0),
+            TrackType::Audio => s_len + v_len + self.project.audio_track_order.iter().position(|&id| id == track_index).unwrap_or(0),
+        }
+    }
+
+    pub fn get_row_track(&self, row: usize) -> (usize, TrackType) {
+        let s_len = self.project.subtitle_track_order.len();
+        let v_len = self.project.video_track_order.len();
+        let a_len = self.project.audio_track_order.len();
+        
+        if row < s_len {
+            (self.project.subtitle_track_order[row], TrackType::Subtitle)
+        } else if row < s_len + v_len {
+            (self.project.video_track_order[row - s_len], TrackType::Video)
+        } else if row < s_len + v_len + a_len {
+            (self.project.audio_track_order[row - s_len - v_len], TrackType::Audio)
+        } else {
+            (1, TrackType::Video)
+        }
+    }
+
+    pub fn get_track_name(&self, row: usize) -> String {
+        let (id, ttype) = self.get_row_track(row);
+        match ttype {
+            TrackType::Subtitle => format!("TEXT {}", id),
+            TrackType::Video => format!("VIDEO {}", id),
+            TrackType::Audio => format!("AUDIO {}", id),
+        }
     }
 
     pub fn select_all_on_track(&mut self, row: usize) {
         self.selected_ids.clear();
         self.selected_id = None;
-        if row == 0 {
+        let (track_id, track_type) = self.get_row_track(row);
+        
+        if track_type == TrackType::Subtitle {
             for sub in &self.project.subtitles {
-                self.selected_ids.insert(sub.id.clone());
+                if sub.track_index == track_id {
+                    self.selected_ids.insert(sub.id.clone());
+                }
             }
         } else {
-            let (track_id, is_audio) = self.get_row_track(row);
+            let is_audio = track_type == TrackType::Audio;
             for m in &self.project.media_files {
                 if m.on_timeline && m.track_index == track_id && (m.media_type == MediaType::Audio) == is_audio {
                     self.selected_ids.insert(m.id.clone());
@@ -274,6 +326,95 @@ impl EditorViewModel {
         }
         self.selected_id = self.selected_ids.iter().next().cloned();
         self.selected_track = row;
+    }
+
+    pub fn add_track_row(&mut self, row: usize, above: bool, track_type: TrackType) {
+        let new_id = match track_type {
+            TrackType::Subtitle => { let id = self.project.next_subtitle_id; self.project.next_subtitle_id += 1; id },
+            TrackType::Video => { let id = self.project.next_video_id; self.project.next_video_id += 1; id },
+            TrackType::Audio => { let id = self.project.next_audio_id; self.project.next_audio_id += 1; id },
+        };
+
+        let s_len = self.project.subtitle_track_order.len();
+        let v_len = self.project.video_track_order.len();
+
+        match track_type {
+            TrackType::Subtitle => {
+                let mut pos = row.min(s_len);
+                if !above && row < s_len { pos += 1; }
+                self.project.subtitle_track_order.insert(pos.clamp(0, self.project.subtitle_track_order.len()), new_id);
+            }
+            TrackType::Video => {
+                let rel_row = row.saturating_sub(s_len);
+                let mut pos = rel_row.min(v_len);
+                if !above && rel_row < v_len { pos += 1; }
+                self.project.video_track_order.insert(pos.clamp(0, self.project.video_track_order.len()), new_id);
+            }
+            TrackType::Audio => {
+                let rel_row = row.saturating_sub(s_len + v_len);
+                let mut pos = rel_row.min(self.project.audio_track_order.len());
+                if !above && rel_row < self.project.audio_track_order.len() { pos += 1; }
+                self.project.audio_track_order.insert(pos.clamp(0, self.project.audio_track_order.len()), new_id);
+            }
+        }
+        self.mark_modified();
+    }
+
+    pub fn move_track_row(&mut self, from_row: usize, to_row: usize) {
+        if from_row == to_row { return; }
+        
+        let (from_id, from_type) = self.get_row_track(from_row);
+        let (_, to_type) = self.get_row_track(to_row);
+        
+        if from_type != to_type { return; }
+        
+        let s_len = self.project.subtitle_track_order.len();
+        let v_len = self.project.video_track_order.len();
+        
+        match from_type {
+            TrackType::Subtitle => {
+                self.project.subtitle_track_order.remove(from_row);
+                self.project.subtitle_track_order.insert(to_row.min(self.project.subtitle_track_order.len()), from_id);
+            }
+            TrackType::Video => {
+                let from_pos = from_row - s_len;
+                let to_pos = to_row - s_len;
+                self.project.video_track_order.remove(from_pos);
+                self.project.video_track_order.insert(to_pos.min(self.project.video_track_order.len()), from_id);
+            }
+            TrackType::Audio => {
+                let from_pos = from_row - s_len - v_len;
+                let to_pos = to_row - s_len - v_len;
+                self.project.audio_track_order.remove(from_pos);
+                self.project.audio_track_order.insert(to_pos.min(self.project.audio_track_order.len()), from_id);
+            }
+        }
+        self.mark_modified();
+    }
+
+    pub fn delete_track(&mut self, row: usize) {
+        let (id, track_type) = self.get_row_track(row);
+        match track_type {
+            TrackType::Subtitle => {
+                if self.project.subtitle_track_order.len() > 1 {
+                    self.project.subtitles.retain(|s| s.track_index != id);
+                    self.project.subtitle_track_order.retain(|&x| x != id);
+                }
+            }
+            TrackType::Video => {
+                if self.project.video_track_order.len() > 1 {
+                    self.project.media_files.retain(|m| !(m.track_index == id && m.media_type != MediaType::Audio));
+                    self.project.video_track_order.retain(|&x| x != id);
+                }
+            }
+            TrackType::Audio => {
+                if self.project.audio_track_order.len() > 1 {
+                    self.project.media_files.retain(|m| !(m.track_index == id && m.media_type == MediaType::Audio));
+                    self.project.audio_track_order.retain(|&x| x != id);
+                }
+            }
+        }
+        self.mark_modified();
     }
 
     pub fn select_with_group(&mut self, id: &str) {
@@ -405,60 +546,76 @@ impl EditorViewModel {
     pub fn shift_selected_tracks(&mut self, dragged_id: &str, row_delta: isize) {
         if row_delta == 0 { return; }
 
-        let dragged_is_audio = self.project.media_files.iter()
-            .find(|m| m.id == dragged_id)
-            .map(|m| m.media_type == MediaType::Audio)
-            .unwrap_or(false);
+        let dragged_type = if let Some(m) = self.project.media_files.iter().find(|m| m.id == dragged_id) {
+            if m.media_type == MediaType::Audio { TrackType::Audio } else { TrackType::Video }
+        } else if self.project.subtitles.iter().any(|s| s.id == dragged_id) {
+            TrackType::Subtitle
+        } else {
+            return;
+        };
 
-        let selected_media_ids: Vec<String> = self.project.media_files.iter()
-            .filter(|m| self.selected_ids.contains(&m.id))
-            .map(|m| m.id.clone())
-            .collect();
+        let selected_ids = self.selected_ids.clone();
 
-        for m_id in selected_media_ids {
-            let (is_audio, curr_track) = match self.project.media_files.iter().find(|m| m.id == m_id) {
-                Some(m) => (m.media_type == MediaType::Audio, m.track_index),
-                None => continue,
-            };
-
-            let effective_delta = if is_audio == dragged_is_audio {
-                row_delta
+        for m_id in selected_ids {
+            let (item_type, curr_track) = if let Some(m) = self.project.media_files.iter().find(|m| m.id == m_id) {
+                let tt = if m.media_type == MediaType::Audio { TrackType::Audio } else { TrackType::Video };
+                (tt, m.track_index)
+            } else if let Some(s) = self.project.subtitles.iter().find(|s| s.id == m_id) {
+                (TrackType::Subtitle, s.track_index)
             } else {
-                -row_delta
+                continue;
             };
 
-            let current_row = self.get_track_row(curr_track, is_audio) as isize;
+            let effective_delta = if item_type == dragged_type { row_delta } else { -row_delta };
+
+            let current_row = self.get_track_row(curr_track, item_type) as isize;
             let mut target_row = current_row + effective_delta;
 
-            if !is_audio {
-                let v_len = self.project.video_track_order.len() as isize;
-                if target_row < 1 {
-                    self.add_track_row(1, true, Some(false));
-                    target_row = 1;
-                } else if target_row > v_len {
-                    self.add_track_row(v_len as usize, false, Some(false));
-                    target_row = v_len + 1;
-                }
-                let (new_track_id, _) = self.get_row_track(target_row as usize);
-                if let Some(m) = self.project.media_files.iter_mut().find(|m| m.id == m_id) {
-                    m.track_index = new_track_id;
-                }
-            } else {
-                let v_len = self.project.video_track_order.len() as isize;
-                let a_len = self.project.audio_track_order.len() as isize;
-                let min_audio_row = v_len + 1;
-                let max_audio_row = v_len + a_len;
+            let s_len = self.project.subtitle_track_order.len() as isize;
+            let v_len = self.project.video_track_order.len() as isize;
+            let a_len = self.project.audio_track_order.len() as isize;
 
-                if target_row < min_audio_row {
-                    self.add_track_row(min_audio_row as usize, true, Some(true));
-                    target_row = min_audio_row;
-                } else if target_row > max_audio_row {
-                    self.add_track_row(max_audio_row as usize, false, Some(true));
-                    target_row = max_audio_row + 1;
+            match item_type {
+                TrackType::Subtitle => {
+                    if target_row < 0 {
+                        self.add_track_row(0, true, TrackType::Subtitle);
+                        target_row = 0;
+                    } else if target_row >= s_len {
+                        self.add_track_row(s_len as usize - 1, false, TrackType::Subtitle);
+                        target_row = s_len;
+                    }
+                    let (new_track_id, _) = self.get_row_track(target_row as usize);
+                    if let Some(s) = self.project.subtitles.iter_mut().find(|s| s.id == m_id) {
+                        s.track_index = new_track_id;
+                    }
                 }
-                let (new_track_id, _) = self.get_row_track(target_row as usize);
-                if let Some(m) = self.project.media_files.iter_mut().find(|m| m.id == m_id) {
-                    m.track_index = new_track_id;
+                TrackType::Video => {
+                    if target_row < s_len {
+                        self.add_track_row(s_len as usize, true, TrackType::Video);
+                        target_row = s_len;
+                    } else if target_row >= s_len + v_len {
+                        self.add_track_row((s_len + v_len - 1) as usize, false, TrackType::Video);
+                        target_row = s_len + v_len;
+                    }
+                    let (new_track_id, _) = self.get_row_track(target_row as usize);
+                    if let Some(m) = self.project.media_files.iter_mut().find(|m| m.id == m_id) {
+                        m.track_index = new_track_id;
+                    }
+                }
+                TrackType::Audio => {
+                    let min_audio = s_len + v_len;
+                    let max_audio = s_len + v_len + a_len;
+                    if target_row < min_audio {
+                        self.add_track_row(min_audio as usize, true, TrackType::Audio);
+                        target_row = min_audio;
+                    } else if target_row >= max_audio {
+                        self.add_track_row((max_audio - 1) as usize, false, TrackType::Audio);
+                        target_row = max_audio;
+                    }
+                    let (new_track_id, _) = self.get_row_track(target_row as usize);
+                    if let Some(m) = self.project.media_files.iter_mut().find(|m| m.id == m_id) {
+                        m.track_index = new_track_id;
+                    }
                 }
             }
         }
@@ -493,122 +650,10 @@ impl EditorViewModel {
         self.snapshot();
     }
 
-    pub fn get_track_row(&self, track_index: usize, is_audio: bool) -> usize {
-        if track_index == 0 { return 0; }
-        if !is_audio {
-            if let Some(pos) = self.project.video_track_order.iter().position(|&id| id == track_index) {
-                return pos + 1;
-            }
-            1
-        } else {
-            if let Some(pos) = self.project.audio_track_order.iter().position(|&id| id == track_index) {
-                return self.project.video_track_order.len() + 1 + pos;
-            }
-            self.project.video_track_order.len() + 1
-        }
-    }
-
-    pub fn get_row_track(&self, row: usize) -> (usize, bool) {
-        if row == 0 { return (0, false); }
-        let v_len = self.project.video_track_order.len();
-        if row <= v_len {
-            (self.project.video_track_order[row - 1], false)
-        } else {
-            let a_idx = row - 1 - v_len;
-            if a_idx < self.project.audio_track_order.len() {
-                (self.project.audio_track_order[a_idx], true)
-            } else {
-                (0, false)
-            }
-        }
-    }
-
-    pub fn get_track_name(&self, row: usize) -> String {
-        let (id, is_audio) = self.get_row_track(row);
-        if id == 0 { return "SUBTITLES".into(); }
-        if is_audio {
-            format!("AUDIO {}", id)
-        } else {
-            format!("VIDEO {}", id)
-        }
-    }
-
-    pub fn add_track_row(&mut self, row: usize, above: bool, force_audio: Option<bool>) {
-        let (_, mut is_audio) = self.get_row_track(row);
-        if let Some(fa) = force_audio { is_audio = fa; }
-        
-        let new_id = if is_audio {
-            let id = self.project.next_audio_id;
-            self.project.next_audio_id += 1;
-            id
-        } else {
-            let id = self.project.next_video_id;
-            self.project.next_video_id += 1;
-            id
-        };
-
-        if is_audio {
-            let v_len = self.project.video_track_order.len();
-            let mut insert_pos = if row <= v_len { 0 } else { row - 1 - v_len };
-            if !above && row > v_len { insert_pos += 1; }
-            self.project.audio_track_order.insert(insert_pos.min(self.project.audio_track_order.len()), new_id);
-        } else {
-            let mut insert_pos = if row == 0 { 0 } else { row - 1 };
-            if !above && row > 0 { insert_pos += 1; }
-            self.project.video_track_order.insert(insert_pos.min(self.project.video_track_order.len()), new_id);
-        }
-        self.mark_modified();
-    }
-
-    pub fn move_track_row(&mut self, from_row: usize, to_row: usize) {
-        if from_row == 0 || to_row == 0 || from_row == to_row { return; }
-        
-        let (from_id, from_is_audio) = self.get_row_track(from_row);
-        let (_, to_is_audio) = self.get_row_track(to_row);
-        
-        if from_is_audio != to_is_audio { return; }
-        
-        if from_is_audio {
-            let v_len = self.project.video_track_order.len();
-            let from_pos = from_row - 1 - v_len;
-            let to_pos = to_row - 1 - v_len;
-            self.project.audio_track_order.remove(from_pos);
-            self.project.audio_track_order.insert(to_pos.min(self.project.audio_track_order.len()), from_id);
-        } else {
-            let from_pos = from_row - 1;
-            let to_pos = to_row - 1;
-            self.project.video_track_order.remove(from_pos);
-            self.project.video_track_order.insert(to_pos.min(self.project.video_track_order.len()), from_id);
-        }
-        self.mark_modified();
-    }
-
-    pub fn delete_track(&mut self, row: usize) {
-        let (id, is_audio) = self.get_row_track(row);
-        if id == 0 { return; } 
-        
-        if is_audio {
-            if self.project.audio_track_order.len() > 1 {
-                self.project.media_files.retain(|m| !(m.track_index == id && m.media_type == MediaType::Audio));
-                if let Some(pos) = self.project.audio_track_order.iter().position(|&x| x == id) {
-                    self.project.audio_track_order.remove(pos);
-                }
-            }
-        } else {
-            if self.project.video_track_order.len() > 1 {
-                self.project.media_files.retain(|m| !(m.track_index == id && m.media_type != MediaType::Audio));
-                if let Some(pos) = self.project.video_track_order.iter().position(|&x| x == id) {
-                    self.project.video_track_order.remove(pos);
-                }
-            }
-        }
-        self.mark_modified();
-    }
-
     pub fn find_free_audio_track(&mut self, start: f64, duration: f64) -> usize {
         let ids = self.project.audio_track_order.clone();
         for &track_id in &ids {
-            if self.can_place_media(None, track_id, true, start, duration) {
+            if self.can_place_media(None, track_id, TrackType::Audio, start, duration) {
                 return track_id;
             }
         }
@@ -618,10 +663,11 @@ impl EditorViewModel {
         new_id
     }
 
-    pub fn can_place_media(&self, ignore_id: Option<&str>, track_id: usize, is_audio: bool, start: f64, duration: f64) -> bool {
+    pub fn can_place_media(&self, ignore_id: Option<&str>, track_id: usize, track_type: TrackType, start: f64, duration: f64) -> bool {
         let end = start + duration;
         for m in &self.project.media_files {
-            if m.on_timeline && m.track_index == track_id && (m.media_type == MediaType::Audio) == is_audio {
+            let m_tt = if m.media_type == MediaType::Audio { TrackType::Audio } else { TrackType::Video };
+            if m.on_timeline && m.track_index == track_id && m_tt == track_type {
                 if let Some(ig) = ignore_id {
                     if m.id == ig { continue; }
                 }
@@ -637,9 +683,10 @@ impl EditorViewModel {
 
     pub fn place_media_on_timeline(&mut self, drag_id: String, mut target_time: f64, mut target_row: usize) {
         target_time = target_time.max(0.0);
-        if target_row == 0 { target_row = 1; }
+        let max_bounds = self.total_tracks() - 1;
+        if target_row > max_bounds { target_row = max_bounds; }
 
-        let (mut target_track_id, target_is_audio) = self.get_row_track(target_row);
+        let (mut target_track_id, target_track_type) = self.get_row_track(target_row);
 
         let base_media = match self.project.media_files.iter().find(|m| m.id == drag_id) {
             Some(m) => m.clone(),
@@ -647,8 +694,9 @@ impl EditorViewModel {
         };
 
         let is_audio_media = base_media.media_type == MediaType::Audio;
+        let expected_type = if is_audio_media { TrackType::Audio } else { TrackType::Video };
 
-        if is_audio_media != target_is_audio {
+        if expected_type != target_track_type {
             target_track_id = if is_audio_media {
                 self.project.audio_track_order.first().copied().unwrap_or(1)
             } else {

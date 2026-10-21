@@ -109,11 +109,22 @@ impl GpuContext {
 
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
 
-        Self { window, surface, device, queue, config, egui_ctx, egui_state, egui_renderer }
+        Self {
+            window,
+            surface,
+            device,
+            queue,
+            config,
+            egui_ctx,
+            egui_state,
+            egui_renderer,
+        }
     }
 
     fn resize(&mut self, new_size: PhysicalSize<u32>) {
-        if new_size.width == 0 || new_size.height == 0 { return; }
+        if new_size.width == 0 || new_size.height == 0 {
+            return;
+        }
         self.config.width = new_size.width;
         self.config.height = new_size.height;
         self.surface.configure(&self.device, &self.config);
@@ -121,7 +132,7 @@ impl GpuContext {
 
     fn render(&mut self, vm: &mut EditorViewModel, inspector_tab: &mut InspectorTab) {
         vm.poll_whisper();
-        vm.poll_render(); 
+        vm.poll_render();
         vm.poll_model_download();
         vm.poll_preview_extraction();
         vm.tick();
@@ -132,12 +143,17 @@ impl GpuContext {
                 self.resize(self.window.inner_size());
                 return;
             }
-            Err(e) => { eprintln!("Surface error: {e}"); return; }
+            Err(e) => {
+                eprintln!("Surface error: {e}");
+                return;
+            }
         };
-        let view = output.texture.create_view(&TextureViewDescriptor::default());
+        let view = output
+            .texture
+            .create_view(&TextureViewDescriptor::default());
 
         let raw_input = self.egui_state.take_egui_input(&self.window);
-        
+
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
             views::top_bar::draw(ctx, vm);
             views::timeline::draw(ctx, vm);
@@ -151,9 +167,19 @@ impl GpuContext {
             vm.maybe_snapshot(pointer_down);
         });
 
-        self.egui_state.handle_platform_output(&self.window, full_output.platform_output);
+        // Honour egui's own repaint requests (e.g. after loading a new font,
+        // which only becomes usable on the *next* frame).
+        let egui_wants_repaint = full_output
+            .viewport_output
+            .values()
+            .any(|v| v.repaint_delay.is_zero());
 
-        let prims = self.egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+        self.egui_state
+            .handle_platform_output(&self.window, full_output.platform_output);
+
+        let prims = self
+            .egui_ctx
+            .tessellate(full_output.shapes, full_output.pixels_per_point);
 
         let screen = ScreenDescriptor {
             size_in_pixels: [self.config.width, self.config.height],
@@ -161,14 +187,18 @@ impl GpuContext {
         };
 
         for (id, delta) in &full_output.textures_delta.set {
-            self.egui_renderer.update_texture(&self.device, &self.queue, *id, delta);
+            self.egui_renderer
+                .update_texture(&self.device, &self.queue, *id, delta);
         }
 
-        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("render encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("render encoder"),
+            });
 
-        self.egui_renderer.update_buffers(&self.device, &self.queue, &mut encoder, &prims, &screen);
+        self.egui_renderer
+            .update_buffers(&self.device, &self.queue, &mut encoder, &prims, &screen);
 
         {
             let mut rpass = encoder
@@ -178,7 +208,12 @@ impl GpuContext {
                         view: &view,
                         resolve_target: None,
                         ops: Operations {
-                            load: LoadOp::Clear(wgpu::Color { r: 0.051, g: 0.059, b: 0.075, a: 1.0 }),
+                            load: LoadOp::Clear(wgpu::Color {
+                                r: 0.051,
+                                g: 0.059,
+                                b: 0.075,
+                                a: 1.0,
+                            }),
                             store: StoreOp::Store,
                         },
                     })],
@@ -197,7 +232,13 @@ impl GpuContext {
             self.egui_renderer.free_texture(id);
         }
 
-        if vm.is_playing() || vm.whisper_is_running() || vm.is_downloading_model() || vm.show_fps || vm.is_rendering {
+        if egui_wants_repaint
+            || vm.is_playing()
+            || vm.whisper_is_running()
+            || vm.is_downloading_model()
+            || vm.show_fps
+            || vm.is_rendering
+        {
             self.window.request_redraw();
         }
     }
@@ -211,7 +252,10 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let gpu = match &mut self.gpu { Some(g) => g, None => return };
+        let gpu = match &mut self.gpu {
+            Some(g) => g,
+            None => return,
+        };
 
         let response = gpu.egui_state.on_window_event(&gpu.window, &event);
         if response.repaint {
@@ -220,7 +264,8 @@ impl ApplicationHandler for App {
 
         match event {
             WindowEvent::DroppedFile(path) => {
-                self.vm.import_media(Some(path));
+                let clean = kineticsub::viewmodels::editor_vm::media::clean_dropped_path(&path);
+                self.vm.import_media(Some(clean));
                 gpu.window.request_redraw();
             }
 
@@ -235,10 +280,24 @@ impl ApplicationHandler for App {
                 self.modifiers = new_modifiers.state();
             }
 
-            WindowEvent::KeyboardInput { event: KeyEvent { physical_key: PhysicalKey::Code(code), state: ElementState::Pressed, .. }, .. } => {
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        physical_key: PhysicalKey::Code(code),
+                        state: ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } => {
+                // If an egui text edit widget is actively focused or egui consumed the key,
+                // do not fire global editor shortcuts.
+                if response.consumed || gpu.egui_ctx.wants_keyboard_input() {
+                    return;
+                }
+
                 let ctrl = self.modifiers.control_key();
                 let shift = self.modifiers.shift_key();
-                
+
                 match code {
                     KeyCode::Space => self.vm.toggle_play(),
                     KeyCode::KeyJ => self.vm.skip(-5.0),
@@ -251,7 +310,7 @@ impl ApplicationHandler for App {
                     KeyCode::KeyZ if ctrl && !shift => self.vm.undo(),
                     KeyCode::KeyY if ctrl => self.vm.redo(),
                     KeyCode::KeyK => self.vm.split_at_playhead(),
-                    KeyCode::Delete | KeyCode::Backspace => self.vm.delete_selected(),
+                    KeyCode::Delete => self.vm.delete_selected(),
                     _ => {}
                 }
                 gpu.window.request_redraw();
@@ -259,7 +318,12 @@ impl ApplicationHandler for App {
 
             WindowEvent::RedrawRequested => {
                 gpu.render(&mut self.vm, &mut self.inspector_tab);
-                if self.vm.is_playing() || self.vm.whisper_is_running() || self.vm.is_downloading_model() || self.vm.show_fps || self.vm.is_rendering {
+                if self.vm.is_playing()
+                    || self.vm.whisper_is_running()
+                    || self.vm.is_downloading_model()
+                    || self.vm.show_fps
+                    || self.vm.is_rendering
+                {
                     gpu.window.request_redraw();
                 }
             }
@@ -270,7 +334,12 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(gpu) = &self.gpu {
-            if self.vm.is_playing() || self.vm.whisper_is_running() || self.vm.is_downloading_model() || self.vm.show_fps || self.vm.is_rendering {
+            if self.vm.is_playing()
+                || self.vm.whisper_is_running()
+                || self.vm.is_downloading_model()
+                || self.vm.show_fps
+                || self.vm.is_rendering
+            {
                 gpu.window.request_redraw();
             }
         }

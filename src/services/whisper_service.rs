@@ -82,14 +82,21 @@ pub fn get_model_path(model: WhisperModel) -> PathBuf {
     if primary.exists() {
         return primary;
     }
-    
-    // Fallbacks to check old temp locations just in case
-    let legacy1 = std::env::temp_dir().join("kineticsub_models").join(format!("ggml-{}.bin", model.id()));
-    if legacy1.exists() { return legacy1; }
-    
-    let legacy2 = std::env::temp_dir().join("models").join(format!("{}.bin", model.id()));
-    if legacy2.exists() { return legacy2; }
-    
+
+    let legacy1 = std::env::temp_dir()
+        .join("kineticsub_models")
+        .join(format!("ggml-{}.bin", model.id()));
+    if legacy1.exists() {
+        return legacy1;
+    }
+
+    let legacy2 = std::env::temp_dir()
+        .join("models")
+        .join(format!("{}.bin", model.id()));
+    if legacy2.exists() {
+        return legacy2;
+    }
+
     primary
 }
 
@@ -135,7 +142,10 @@ pub fn spawn_download_model(model: WhisperModel, tx: mpsc::Sender<ModelDownloadM
     thread::spawn(move || {
         let models_dir = get_models_dir();
         if let Err(e) = std::fs::create_dir_all(&models_dir) {
-            let _ = tx.send(ModelDownloadMessage::Error(format!("Failed to create folder: {}", e)));
+            let _ = tx.send(ModelDownloadMessage::Error(format!(
+                "Failed to create folder: {}",
+                e
+            )));
             return;
         }
 
@@ -153,7 +163,10 @@ pub fn spawn_download_model(model: WhisperModel, tx: mpsc::Sender<ModelDownloadM
         {
             Ok(c) => c,
             Err(e) => {
-                let _ = tx.send(ModelDownloadMessage::Error(format!("Client build error: {}", e)));
+                let _ = tx.send(ModelDownloadMessage::Error(format!(
+                    "Client build error: {}",
+                    e
+                )));
                 return;
             }
         };
@@ -167,7 +180,10 @@ pub fn spawn_download_model(model: WhisperModel, tx: mpsc::Sender<ModelDownloadM
         };
 
         if !res.status().is_success() {
-            let _ = tx.send(ModelDownloadMessage::Error(format!("HTTP error {}", res.status())));
+            let _ = tx.send(ModelDownloadMessage::Error(format!(
+                "HTTP error {}",
+                res.status()
+            )));
             return;
         }
 
@@ -175,7 +191,10 @@ pub fn spawn_download_model(model: WhisperModel, tx: mpsc::Sender<ModelDownloadM
         let mut file = match File::create(&part_path) {
             Ok(f) => f,
             Err(e) => {
-                let _ = tx.send(ModelDownloadMessage::Error(format!("File creation error: {}", e)));
+                let _ = tx.send(ModelDownloadMessage::Error(format!(
+                    "File creation error: {}",
+                    e
+                )));
                 return;
             }
         };
@@ -222,7 +241,12 @@ pub fn spawn_download_model(model: WhisperModel, tx: mpsc::Sender<ModelDownloadM
     });
 }
 
-pub fn spawn_transcription(audio_path: String, model: WhisperModel, tx: mpsc::Sender<WhisperMessage>) {
+pub fn spawn_transcription(
+    audio_path: String,
+    time_range: Option<(f64, f64)>,
+    model: WhisperModel,
+    tx: mpsc::Sender<WhisperMessage>,
+) {
     thread::spawn(move || {
         let model_path = get_model_path(model);
 
@@ -236,15 +260,39 @@ pub fn spawn_transcription(audio_path: String, model: WhisperModel, tx: mpsc::Se
 
         let _ = tx.send(WhisperMessage::Transcribing);
 
-        match run_whisper(&audio_path, model_path.to_str().unwrap(), model) {
-            Ok((words, duration)) => { let _ = tx.send(WhisperMessage::Done(words, duration)); }
-            Err(e) => { let _ = tx.send(WhisperMessage::Error(e)); }
+        match run_whisper(&audio_path, time_range, model_path.to_str().unwrap(), model) {
+            Ok((words, duration)) => {
+                let _ = tx.send(WhisperMessage::Done(words, duration));
+            }
+            Err(e) => {
+                let _ = tx.send(WhisperMessage::Error(e));
+            }
         }
     });
 }
 
-fn run_whisper(audio_path: &str, model_path: &str, model: WhisperModel) -> Result<(Vec<RawWord>, f64), String> {
-    let pcm = decode_audio_to_pcm(audio_path)?;
+fn run_whisper(
+    audio_path: &str,
+    time_range: Option<(f64, f64)>,
+    model_path: &str,
+    model: WhisperModel,
+) -> Result<(Vec<RawWord>, f64), String> {
+    let full_pcm = decode_audio_to_pcm(audio_path)?;
+
+    let pcm = if let Some((start_sec, dur_sec)) = time_range {
+        let sample_rate = 16000.0;
+        let start_idx = (start_sec.max(0.0) * sample_rate).round() as usize;
+        let num_samples = (dur_sec.max(0.05) * sample_rate).round() as usize;
+
+        if start_idx >= full_pcm.len() {
+            return Err("Timeline audio segment is outside audio file boundaries.".into());
+        }
+        let end_idx = (start_idx + num_samples).min(full_pcm.len());
+        full_pcm[start_idx..end_idx].to_vec()
+    } else {
+        full_pcm
+    };
+
     let audio_duration = pcm.len() as f64 / 16000.0;
 
     let ctx = WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
@@ -261,23 +309,31 @@ fn run_whisper(audio_path: &str, model_path: &str, model: WhisperModel) -> Resul
     params.set_max_len(1);
     params.set_split_on_word(true);
 
-    state.full(params, &pcm).map_err(|e| format!("Whisper inference failed: {e}"))?;
+    state
+        .full(params, &pcm)
+        .map_err(|e| format!("Whisper inference failed: {e}"))?;
 
     let mut words = Vec::new();
     for segment in state.as_iter() {
         let text = segment.to_string().trim().to_string();
-        if text.starts_with('[') || text.is_empty() { continue; }
+        if text.starts_with('[') || text.is_empty() {
+            continue;
+        }
 
         let start_secs = segment.start_timestamp() as f64 / 100.0;
         let end_secs = segment.end_timestamp() as f64 / 100.0;
 
         if end_secs > start_secs {
-            words.push(RawWord { text, start: start_secs, end: end_secs });
+            words.push(RawWord {
+                text,
+                start: start_secs,
+                end: end_secs,
+            });
         }
     }
 
     if words.is_empty() {
-        return Err("No words found. Is the audio silent?".into());
+        return Err("No words found in this audio segment.".into());
     }
 
     Ok((words, audio_duration))
@@ -295,8 +351,14 @@ fn decode_wav(path: &str) -> Result<Vec<f32>, String> {
     let mut reader = hound::WavReader::open(path).map_err(|e| e.to_string())?;
     let spec = reader.spec();
 
-    let samples_i16: Vec<i16> = reader.samples::<i16>().map(|s| s.map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?;
-    let mut samples_f32: Vec<f32> = samples_i16.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
+    let samples_i16: Vec<i16> = reader
+        .samples::<i16>()
+        .map(|s| s.map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut samples_f32: Vec<f32> = samples_i16
+        .iter()
+        .map(|&s| s as f32 / i16::MAX as f32)
+        .collect();
 
     if spec.channels == 2 {
         samples_f32 = samples_f32.chunks(2).map(|c| (c[0] + c[1]) / 2.0).collect();
@@ -316,7 +378,10 @@ fn decode_with_symphonia(path: &str) -> Result<Vec<f32>, String> {
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
-    if let Some(ext) = std::path::Path::new(path).extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+    {
         hint.with_extension(ext);
     }
 
@@ -325,7 +390,9 @@ fn decode_with_symphonia(path: &str) -> Result<Vec<f32>, String> {
         .map_err(|e| e.to_string())?;
 
     let mut format = probed.format;
-    let track = format.tracks().iter()
+    let track = format
+        .tracks()
+        .iter()
         .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
         .ok_or("No audio track found")?;
 
@@ -344,7 +411,9 @@ fn decode_with_symphonia(path: &str) -> Result<Vec<f32>, String> {
             Ok(p) => p,
             Err(_) => break,
         };
-        if packet.track_id() != track_id { continue; }
+        if packet.track_id() != track_id {
+            continue;
+        }
         let decoded = match decoder.decode(&packet) {
             Ok(d) => d,
             Err(_) => continue,
@@ -355,7 +424,10 @@ fn decode_with_symphonia(path: &str) -> Result<Vec<f32>, String> {
     }
 
     let mono: Vec<f32> = if channels > 1 {
-        all_samples.chunks(channels).map(|c| c.iter().sum::<f32>() / channels as f32).collect()
+        all_samples
+            .chunks(channels)
+            .map(|c| c.iter().sum::<f32>() / channels as f32)
+            .collect()
     } else {
         all_samples
     };
@@ -370,11 +442,13 @@ fn decode_with_symphonia(path: &str) -> Result<Vec<f32>, String> {
 fn resample_linear(samples: Vec<f32>, from_rate: f64, to_rate: f64) -> Vec<f32> {
     let ratio = from_rate / to_rate;
     let out_len = (samples.len() as f64 / ratio) as usize;
-    (0..out_len).map(|i| {
-        let src = i as f64 * ratio;
-        let lo = src as usize;
-        let hi = (lo + 1).min(samples.len() - 1);
-        let t = (src - lo as f64) as f32;
-        samples[lo] * (1.0 - t) + samples[hi] * t
-    }).collect()
+    (0..out_len)
+        .map(|i| {
+            let src = i as f64 * ratio;
+            let lo = src as usize;
+            let hi = (lo + 1).min(samples.len() - 1);
+            let t = (src - lo as f64) as f32;
+            samples[lo] * (1.0 - t) + samples[hi] * t
+        })
+        .collect()
 }

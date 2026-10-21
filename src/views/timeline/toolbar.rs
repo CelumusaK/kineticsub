@@ -1,7 +1,7 @@
-use egui::{Pos2, Rect, RichText, Rounding, Stroke, Vec2};
+use super::{HEADER_H, TOOLBAR_H};
 use crate::viewmodels::editor_vm::EditorViewModel;
 use crate::views::theme::{BG_HOVER, BG_PANEL, BORDER, TEXT_DIM, TEXT_NORM};
-use super::{HEADER_H, TOOLBAR_H};
+use egui::{Pos2, Rect, RichText, Rounding, Stroke, Vec2};
 
 pub fn draw_toolbar(ui: &mut egui::Ui, vm: &mut EditorViewModel, panel_rect: Rect) {
     let tb_y = panel_rect.min.y + HEADER_H;
@@ -18,17 +18,26 @@ pub fn draw_toolbar(ui: &mut egui::Ui, vm: &mut EditorViewModel, panel_rect: Rec
             .show(ui, |ui| {
                 ui.set_min_size(Vec2::new(panel_rect.width(), TOOLBAR_H));
                 ui.horizontal_centered(|ui| {
-                    let cut_btn = egui::Button::new(RichText::new("✂ Split (K)").color(TEXT_NORM).size(11.0))
-                        .fill(BG_HOVER)
-                        .stroke(Stroke::new(1.0, BORDER))
-                        .rounding(Rounding::same(4.0));
+                    let cut_btn =
+                        egui::Button::new(RichText::new("✂ Split (K)").color(TEXT_NORM).size(11.0))
+                            .fill(BG_HOVER)
+                            .stroke(Stroke::new(1.0_f32, BORDER))
+                            .rounding(Rounding::same(4.0));
 
-                    if ui.add(cut_btn).on_hover_text("Split active clips at the playhead position").clicked() {
+                    if ui
+                        .add(cut_btn)
+                        .on_hover_text("Split active clips at the playhead position")
+                        .clicked()
+                    {
                         vm.split_at_playhead();
                     }
 
                     ui.add_space(8.0);
-                    ui.label(RichText::new("Non-Linear Multi-Track").color(TEXT_DIM).size(10.5));
+                    ui.label(
+                        RichText::new("Non-Linear Multi-Track")
+                            .color(TEXT_DIM)
+                            .size(10.5),
+                    );
                 });
             });
     });

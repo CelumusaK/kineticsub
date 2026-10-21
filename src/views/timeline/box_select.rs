@@ -1,5 +1,5 @@
 use egui::{Context, Pos2, Rect, Stroke};
-use crate::models::types::MediaType;
+use crate::models::types::{MediaType, TrackType};
 use crate::viewmodels::editor_vm::EditorViewModel;
 use crate::views::theme::ACCENT_CYAN;
 use super::{LABEL_W, RULER_H, TRACK_H};
@@ -40,11 +40,13 @@ pub fn draw_box_select(
 
             vm.selected_ids.clear();
 
-            // Subtitle track (Row 0) vertical bounds
-            let sub_y_min = origin.y + RULER_H;
-            let sub_y_max = sub_y_min + TRACK_H;
-            if max_y > sub_y_min && min_y < sub_y_max {
-                for sub in &vm.project.subtitles {
+            // Subtitle track vertical bounds
+            for sub in &vm.project.subtitles {
+                let row_idx = vm.get_track_row(sub.track_index, TrackType::Subtitle);
+                let sub_y_min = origin.y + RULER_H + (row_idx as f32 * TRACK_H);
+                let sub_y_max = sub_y_min + TRACK_H;
+                
+                if max_y > sub_y_min && min_y < sub_y_max {
                     if sub.timeline_end > t_min && sub.timeline_start < t_max {
                         vm.selected_ids.insert(sub.id.clone());
                     }
@@ -54,7 +56,8 @@ pub fn draw_box_select(
             // Media tracks vertical bounds
             for m in &vm.project.media_files {
                 if m.on_timeline {
-                    let row_idx = vm.get_track_row(m.track_index, m.media_type == MediaType::Audio);
+                    let track_type = if m.media_type == MediaType::Audio { TrackType::Audio } else { TrackType::Video };
+                    let row_idx = vm.get_track_row(m.track_index, track_type);
                     let m_y_min = origin.y + RULER_H + (row_idx as f32 * TRACK_H);
                     let m_y_max = m_y_min + TRACK_H;
 

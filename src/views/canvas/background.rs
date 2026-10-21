@@ -1,5 +1,5 @@
 use egui::{Pos2, Rect, Vec2, Color32, Stroke};
-use crate::models::types::{MediaFile, MediaType, TransitionType};
+use crate::models::types::{MediaFile, MediaType, TransitionType, TrackType};
 use crate::viewmodels::editor_vm::EditorViewModel;
 
 pub fn draw(painter: &egui::Painter, preview_rect: Rect, vm: &mut EditorViewModel, ctx: &egui::Context) {
@@ -48,7 +48,7 @@ pub fn draw(painter: &egui::Painter, preview_rect: Rect, vm: &mut EditorViewMode
         }
     }
 
-    active_visuals.sort_by(|a, b| vm.get_track_row(b.0.track_index, false).cmp(&vm.get_track_row(a.0.track_index, false)));
+    active_visuals.sort_by(|a, b| vm.get_track_row(b.0.track_index, TrackType::Video).cmp(&vm.get_track_row(a.0.track_index, TrackType::Video)));
 
     if active_visuals.is_empty() {
         let cell_size = 16.0;

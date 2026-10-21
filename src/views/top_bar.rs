@@ -1,8 +1,8 @@
 use egui::{Align, Context, Direction, Layout, RichText, Stroke, TopBottomPanel, vec2};
 use crate::viewmodels::editor_vm::EditorViewModel;
 use super::theme::{
-    ACCENT_AMBER, ACCENT_CYAN, BG_BASE, BG_HOVER, BG_SELECTED, BORDER, TEXT_BRIGHT,
-    TEXT_DIM, TEXT_MUTED, TEXT_NORM,
+    ACCENT_AMBER, ACCENT_CYAN, BG_BASE, BG_HOVER, BORDER, TEXT_BRIGHT,
+    TEXT_DIM, TEXT_NORM,
 };
 
 pub fn draw(ctx: &Context, vm: &mut EditorViewModel) {
@@ -10,7 +10,7 @@ pub fn draw(ctx: &Context, vm: &mut EditorViewModel) {
         .exact_height(36.0)
         .frame(egui::Frame {
             fill: BG_BASE,
-            stroke: Stroke::new(1.0, BORDER),
+            stroke: Stroke::new(1.0_f32, BORDER),
             inner_margin: egui::Margin::symmetric(14.0, 0.0),
             ..Default::default()
         })
@@ -23,7 +23,7 @@ pub fn draw(ctx: &Context, vm: &mut EditorViewModel) {
                 ui.add_space(16.0);
                 ui.painter().line_segment(
                     [egui::pos2(ui.cursor().min.x, ui.cursor().min.y + 10.0), egui::pos2(ui.cursor().min.x, ui.cursor().min.y + 24.0)],
-                    Stroke::new(1.0, BORDER),
+                    Stroke::new(1.0_f32, BORDER),
                 );
                 ui.add_space(16.0);
 
@@ -86,7 +86,7 @@ pub fn draw(ctx: &Context, vm: &mut EditorViewModel) {
                         RichText::new("Settings").color(TEXT_NORM).size(11.5),
                     )
                     .fill(BG_HOVER)
-                    .stroke(Stroke::new(1.0, BORDER))
+                    .stroke(Stroke::new(1.0_f32, BORDER))
                     .rounding(4.0);
 
                     if ui.add(settings_btn).clicked() {

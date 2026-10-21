@@ -7,16 +7,16 @@ pub mod subtitle_blocks;
 pub mod toolbar;
 pub mod tracks;
 
-use egui::{Context, Pos2, Rect, Stroke, TopBottomPanel, Vec2};
-use crate::models::types::TransitionType;
+use crate::models::types::{TrackType, TransitionType};
 use crate::viewmodels::editor_vm::EditorViewModel;
-use crate::views::theme::{BG_PANEL_ALT, BORDER, ACCENT_CYAN, ACCENT_AMBER};
+use crate::views::theme::{ACCENT_AMBER, ACCENT_CYAN, BG_PANEL_ALT, BORDER};
+use egui::{Context, Pos2, Rect, Stroke, TopBottomPanel, Vec2};
 
 pub const HEADER_H: f32 = 26.0;
 pub const TOOLBAR_H: f32 = 28.0;
 pub const RULER_H: f32 = 22.0;
 pub const TRACK_H: f32 = 40.0;
-pub const LABEL_W: f32 = 100.0; 
+pub const LABEL_W: f32 = 100.0;
 
 pub fn draw(ctx: &Context, vm: &mut EditorViewModel) {
     TopBottomPanel::bottom("timeline_panel")
@@ -30,7 +30,7 @@ pub fn draw(ctx: &Context, vm: &mut EditorViewModel) {
         })
         .show(ctx, |ui| {
             let panel_rect = ui.max_rect();
-            
+
             if ui.rect_contains_pointer(panel_rect) {
                 vm.hovered_panel = crate::viewmodels::editor_vm::HoverPanel::Timeline;
             }
@@ -39,17 +39,18 @@ pub fn draw(ctx: &Context, vm: &mut EditorViewModel) {
             toolbar::draw_toolbar(ui, vm, panel_rect);
 
             let content_rect = ui.available_rect_before_wrap();
-            let (bg_resp, painter) = ui.allocate_painter(content_rect.size(), egui::Sense::click_and_drag());
-            
-            let tracks_rect = bg_resp.rect; 
-            let origin = tracks_rect.min; 
+            let (bg_resp, painter) =
+                ui.allocate_painter(content_rect.size(), egui::Sense::click_and_drag());
+
+            let tracks_rect = bg_resp.rect;
+            let origin = tracks_rect.min;
 
             let view_w_secs = (tracks_rect.width() - LABEL_W) as f64 / vm.timeline_zoom as f64;
-            let padding_secs = 50.0 / vm.timeline_zoom as f64; 
+            let padding_secs = 50.0 / vm.timeline_zoom as f64;
 
             {
                 let current_t = vm.current_time();
-                let margin    = view_w_secs * 0.1;
+                let margin = view_w_secs * 0.1;
 
                 if vm.is_playing() || vm.is_scrubbing {
                     if current_t > vm.timeline_scroll + view_w_secs - margin {
@@ -73,31 +74,71 @@ pub fn draw(ctx: &Context, vm: &mut EditorViewModel) {
 
             let mut track_origin = origin;
             track_origin.y -= vm.timeline_vertical_scroll;
-            
+
+            // Area below the ruler where tracks are visible. Everything that
+            // scrolls vertically is clipped (both painting AND hit-testing) to this.
             let track_area_rect = Rect::from_min_max(
                 Pos2::new(tracks_rect.min.x, tracks_rect.min.y + RULER_H),
-                tracks_rect.max
+                tracks_rect.max,
             );
             let track_painter = painter.with_clip_rect(track_area_rect);
 
             tracks::draw_track_lines(&track_painter, track_origin, tracks_rect, vm, ui);
 
             let mut hovered_block = false;
-            let mut needs_sort    = false;
+            let mut needs_sort = false;
 
-            audio_blocks::draw_media_blocks(ui, vm, &track_painter, track_origin, tracks_rect, &mut hovered_block, ctx);
-            subtitle_blocks::draw_subtitle_blocks(ui, vm, &track_painter, track_origin, tracks_rect, &mut hovered_block, &mut needs_sort, ctx);
+            // NOTE: the block drawers build their clip/interact rect from
+            // `tracks_rect.min.y`, so we hand them the ruler-excluded rect. That way
+            // blocks scrolled up under the ruler can never steal ruler clicks.
+            audio_blocks::draw_media_blocks(
+                ui,
+                vm,
+                &track_painter,
+                track_origin,
+                track_area_rect,
+                &mut hovered_block,
+                ctx,
+            );
+            subtitle_blocks::draw_subtitle_blocks(
+                ui,
+                vm,
+                &track_painter,
+                track_origin,
+                track_area_rect,
+                &mut hovered_block,
+                &mut needs_sort,
+                ctx,
+            );
 
-            draw_transition_blocks(ui, vm, &track_painter, track_origin, tracks_rect, &mut hovered_block, ctx);
+            draw_transition_blocks(
+                ui,
+                vm,
+                &track_painter,
+                track_origin,
+                track_area_rect,
+                &mut hovered_block,
+                ctx,
+            );
 
             handle_scrub_and_pan(ui, vm, &bg_resp, origin, tracks_rect, hovered_block, ctx);
-            box_select::draw_box_select(ui, vm, &track_painter, track_origin, tracks_rect, &bg_resp, ctx);
+            box_select::draw_box_select(
+                ui,
+                vm,
+                &track_painter,
+                track_origin,
+                tracks_rect,
+                &bg_resp,
+                ctx,
+            );
 
             if let Some(drag_id) = vm.dragging_media_id.clone() {
                 if let Some(pos) = ctx.pointer_hover_pos() {
                     if tracks_rect.contains(pos) && pos.x > origin.x + LABEL_W {
-                        let track_idx_raw = ((pos.y - (track_origin.y + RULER_H)) / TRACK_H).floor() as isize;
-                        let target_row = track_idx_raw.clamp(1, vm.total_tracks() as isize - 1) as usize; 
+                        let track_idx_raw =
+                            ((pos.y - (track_origin.y + RULER_H)) / TRACK_H).floor() as isize;
+                        let target_row =
+                            track_idx_raw.clamp(0, vm.total_tracks() as isize - 1) as usize;
                         let target_time = vm.px_to_time(pos.x - origin.x - LABEL_W).max(0.0);
 
                         let highlight_y = track_origin.y + RULER_H + (target_row as f32 * TRACK_H);
@@ -105,8 +146,16 @@ pub fn draw(ctx: &Context, vm: &mut EditorViewModel) {
                             Pos2::new(pos.x, highlight_y),
                             Vec2::new(100.0, TRACK_H),
                         );
-                        track_painter.rect_filled(highlight_rect, 4.0, ACCENT_CYAN.linear_multiply(0.3));
-                        track_painter.rect_stroke(highlight_rect, 4.0, egui::Stroke::new(1.0_f32, ACCENT_CYAN));
+                        track_painter.rect_filled(
+                            highlight_rect,
+                            4.0,
+                            ACCENT_CYAN.linear_multiply(0.3),
+                        );
+                        track_painter.rect_stroke(
+                            highlight_rect,
+                            4.0,
+                            egui::Stroke::new(1.0_f32, ACCENT_CYAN),
+                        );
 
                         if ctx.input(|i| i.pointer.any_released()) {
                             vm.place_media_on_timeline(drag_id, target_time, target_row);
@@ -123,7 +172,52 @@ pub fn draw(ctx: &Context, vm: &mut EditorViewModel) {
 
             playhead::draw_playhead(&painter, vm, origin, tracks_rect);
 
-            if needs_sort { vm.sort_subtitles(); }
+            // ── Vertical scrollbar (only when there are more tracks than fit) ─────
+            if max_v_scroll > 0.0 {
+                let view_h = (tracks_rect.height() - RULER_H).max(1.0);
+                let content_h = (total_tracks as f32 * TRACK_H).max(1.0);
+                let thumb_h = ((view_h / content_h) * view_h).clamp(24.0, view_h);
+                let travel = (view_h - thumb_h).max(1.0);
+                let t = (vm.timeline_vertical_scroll / max_v_scroll).clamp(0.0, 1.0);
+                let thumb_top = track_area_rect.min.y + t * travel;
+
+                let track_rect = Rect::from_min_size(
+                    Pos2::new(tracks_rect.max.x - 10.0, track_area_rect.min.y),
+                    Vec2::new(10.0, view_h),
+                );
+                let thumb_rect = Rect::from_min_size(
+                    Pos2::new(tracks_rect.max.x - 8.0, thumb_top),
+                    Vec2::new(6.0, thumb_h),
+                );
+
+                let sb_resp = ui.interact(
+                    track_rect,
+                    ui.id().with("timeline_vscroll"),
+                    egui::Sense::click_and_drag(),
+                );
+                if sb_resp.dragged() {
+                    // Convert thumb movement to scroll movement.
+                    let d = sb_resp.drag_delta().y;
+                    vm.timeline_vertical_scroll = (vm.timeline_vertical_scroll
+                        + d * (max_v_scroll / travel))
+                        .clamp(0.0, max_v_scroll);
+                }
+                if sb_resp.hovered() || sb_resp.dragged() {
+                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Default);
+                }
+
+                let alpha = if sb_resp.hovered() || sb_resp.dragged() {
+                    110
+                } else {
+                    55
+                };
+                painter.rect_filled(track_rect, 3.0, egui::Color32::from_white_alpha(8));
+                painter.rect_filled(thumb_rect, 3.0, egui::Color32::from_white_alpha(alpha));
+            }
+
+            if needs_sort {
+                vm.sort_subtitles();
+            }
         });
 }
 
@@ -138,7 +232,7 @@ fn draw_transition_blocks(
 ) {
     let track_clip = Rect::from_min_max(
         Pos2::new(origin.x + LABEL_W, tracks_rect.min.y),
-        tracks_rect.max
+        tracks_rect.max,
     );
     let p = painter.with_clip_rect(track_clip);
 
@@ -150,7 +244,7 @@ fn draw_transition_blocks(
 
     for (idx, trans) in vm.project.transitions.iter().enumerate() {
         let is_valid = vm.is_transition_valid(trans);
-        let row_idx = vm.get_track_row(trans.track_index, false);
+        let row_idx = vm.get_track_row(trans.track_index, TrackType::Video);
         let row_y = origin.y + RULER_H + (row_idx as f32 * TRACK_H);
 
         let block_x = origin.x + LABEL_W + vm.time_to_px(trans.timeline_start);
@@ -162,9 +256,15 @@ fn draw_transition_blocks(
         );
 
         let interact_rect = rect.intersect(track_clip);
-        if !interact_rect.is_positive() { continue; }
+        if !interact_rect.is_positive() {
+            continue;
+        }
 
-        let resp = ui.interact(interact_rect, ui.id().with(format!("trans_{}", trans.id)), egui::Sense::click_and_drag());
+        let resp = ui.interact(
+            interact_rect,
+            ui.id().with(format!("trans_{}", trans.id)),
+            egui::Sense::click_and_drag(),
+        );
         let is_selected = vm.selected_ids.contains(&trans.id);
 
         if resp.clicked() {
@@ -192,9 +292,13 @@ fn draw_transition_blocks(
 
         if resp.drag_started() {
             if let Some(pos) = resp.interact_pointer_pos() {
-                if pos.x < rect.min.x + handle_w { drag_mode = 1; }
-                else if pos.x > rect.max.x - handle_w { drag_mode = 2; }
-                else { drag_mode = 0; }
+                if pos.x < rect.min.x + handle_w {
+                    drag_mode = 1;
+                } else if pos.x > rect.max.x - handle_w {
+                    drag_mode = 2;
+                } else {
+                    drag_mode = 0;
+                }
                 ui.data_mut(|d| d.insert_temp(drag_id, drag_mode));
             }
         }
@@ -223,7 +327,10 @@ fn draw_transition_blocks(
                 }
             });
             ui.separator();
-            if ui.button(egui::RichText::new("🗑 Delete Transition").color(ACCENT_AMBER)).clicked() {
+            if ui
+                .button(egui::RichText::new("🗑 Delete Transition").color(ACCENT_AMBER))
+                .clicked()
+            {
                 to_delete = Some(idx);
                 ui.close_menu();
             }
@@ -246,11 +353,18 @@ fn draw_transition_blocks(
         }
 
         p.rect_filled(rect, 4.0, fill_col);
-        p.rect_stroke(rect, 4.0, Stroke::new(if is_selected { 2.0_f32 } else { 1.5_f32 }, stroke_col));
+        p.rect_stroke(
+            rect,
+            4.0,
+            Stroke::new(if is_selected { 2.0_f32 } else { 1.5_f32 }, stroke_col),
+        );
 
         let mid_x = rect.center().x;
         p.line_segment(
-            [Pos2::new(mid_x, rect.min.y + 2.0), Pos2::new(mid_x, rect.max.y - 2.0)],
+            [
+                Pos2::new(mid_x, rect.min.y + 2.0),
+                Pos2::new(mid_x, rect.max.y - 2.0),
+            ],
             Stroke::new(1.0_f32, egui::Color32::from_white_alpha(150)),
         );
 
@@ -326,12 +440,14 @@ pub fn handle_scrub_and_pan(
     ctx: &Context,
 ) {
     let shift = ctx.input(|i| i.modifiers.shift);
-    let alt   = ctx.input(|i| i.modifiers.alt);
+    let _alt = ctx.input(|i| i.modifiers.alt);
 
     if !hovered_block && !shift && (bg_resp.dragged() || bg_resp.clicked()) {
         let pointer_pos = ctx.input(|i| i.pointer.interact_pos().or(i.pointer.hover_pos()));
         if let Some(pos) = pointer_pos {
-            if pos.x >= origin.x + LABEL_W {
+            if pos.x >= origin.x + LABEL_W
+                && pos.y <= origin.y + RULER_H + 0.0 + tracks_rect.height()
+            {
                 let t = vm.px_to_time(pos.x - (origin.x + LABEL_W));
                 vm.seek_to(t.clamp(0.0, vm.project.duration));
             }
@@ -350,27 +466,39 @@ pub fn handle_scrub_and_pan(
             let scroll_x = if scroll.x != 0.0 { scroll.x } else { smooth.x };
 
             if i.modifiers.alt && scroll_y != 0.0 {
+                // Alt + wheel → zoom
                 zoom_delta = scroll_y;
                 i.raw_scroll_delta = egui::Vec2::ZERO;
                 i.smooth_scroll_delta = egui::Vec2::ZERO;
-                i.events.retain(|e| !matches!(e, egui::Event::MouseWheel { .. }));
-            } else if i.modifiers.shift && scroll_y != 0.0 {
-                v_pan_delta = scroll_y;
+                i.events
+                    .retain(|e| !matches!(e, egui::Event::MouseWheel { .. }));
+            } else if i.modifiers.shift && (scroll_y != 0.0 || scroll_x != 0.0) {
+                // Shift + wheel → scroll tracks up/down.
+                // egui converts a wheel turn into HORIZONTAL scroll when Shift is held
+                // (the y delta ends up in x), so we must look at both axes.
+                v_pan_delta = scroll_y + scroll_x;
                 i.raw_scroll_delta = egui::Vec2::ZERO;
                 i.smooth_scroll_delta = egui::Vec2::ZERO;
-                i.events.retain(|e| !matches!(e, egui::Event::MouseWheel { .. }));
+                i.events
+                    .retain(|e| !matches!(e, egui::Event::MouseWheel { .. }));
             } else if scroll_x != 0.0 || scroll_y != 0.0 {
-                h_pan_delta = if scroll_x.abs() > 0.0 { scroll_x } else { scroll_y };
+                // Plain wheel / trackpad → scroll along time
+                h_pan_delta = if scroll_x.abs() > 0.0 {
+                    scroll_x
+                } else {
+                    scroll_y
+                };
                 i.raw_scroll_delta = egui::Vec2::ZERO;
                 i.smooth_scroll_delta = egui::Vec2::ZERO;
-                i.events.retain(|e| !matches!(e, egui::Event::MouseWheel { .. }));
+                i.events
+                    .retain(|e| !matches!(e, egui::Event::MouseWheel { .. }));
             }
         });
 
         if zoom_delta != 0.0 {
             let old_zoom = vm.timeline_zoom;
             vm.timeline_zoom = (vm.timeline_zoom + zoom_delta * 0.5).clamp(10.0, 1000.0);
-            
+
             if vm.timeline_zoom != old_zoom {
                 let focus_time = if vm.timeline_zoom_to_mouse {
                     if let Some(pos) = ctx.pointer_hover_pos() {
@@ -381,24 +509,27 @@ pub fn handle_scrub_and_pan(
                 } else {
                     vm.current_time()
                 };
-                
+
                 let px_old = (focus_time - vm.timeline_scroll) * old_zoom as f64;
                 vm.timeline_scroll = focus_time - (px_old / vm.timeline_zoom as f64);
             }
         }
-        
+
         if v_pan_delta != 0.0 {
             let total_tracks = vm.total_tracks();
             let total_height = RULER_H + (total_tracks as f32 * TRACK_H);
             let max_v_scroll = (total_height - tracks_rect.height()).max(0.0);
-            vm.timeline_vertical_scroll = (vm.timeline_vertical_scroll - v_pan_delta).clamp(0.0, max_v_scroll);
+            vm.timeline_vertical_scroll =
+                (vm.timeline_vertical_scroll - v_pan_delta).clamp(0.0, max_v_scroll);
         }
 
         if h_pan_delta != 0.0 {
             let view_w_secs = (tracks_rect.width() - LABEL_W) as f64 / vm.timeline_zoom as f64;
             let padding_secs = 50.0 / vm.timeline_zoom as f64;
             let max_scroll = (vm.project.duration + padding_secs - view_w_secs).max(-padding_secs);
-            vm.timeline_scroll = (vm.timeline_scroll - h_pan_delta as f64 / vm.timeline_zoom as f64).clamp(-padding_secs, max_scroll);
+            vm.timeline_scroll = (vm.timeline_scroll
+                - h_pan_delta as f64 / vm.timeline_zoom as f64)
+                .clamp(-padding_secs, max_scroll);
         }
     }
 }

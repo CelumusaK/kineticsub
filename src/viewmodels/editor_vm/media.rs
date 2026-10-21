@@ -1,16 +1,68 @@
+use super::{EditorViewModel, PreviewMessage, TranscribeMode};
+use crate::models::types::{MediaFile, MediaType, Subtitle, TrackType};
+use crate::services::whisper_service::{is_model_downloaded, spawn_transcription, WhisperMessage};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::process::Command;
-use super::{EditorViewModel, TranscribeMode, PreviewMessage};
-use crate::models::types::{MediaFile, MediaType, Subtitle};
-use crate::services::whisper_service::{
-    is_model_downloaded, spawn_transcription, WhisperMessage,
-};
+use std::sync::mpsc;
+
+pub fn percent_decode(input: &str) -> String {
+    let mut bytes = Vec::with_capacity(input.len());
+    let b = input.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(val) =
+                u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or(""), 16)
+            {
+                bytes.push(val);
+                i += 3;
+                continue;
+            }
+        }
+        bytes.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
+pub fn clean_dropped_path(path: &Path) -> PathBuf {
+    if path.exists() {
+        return path.to_path_buf();
+    }
+    let s = path.to_string_lossy();
+    let mut raw = s.as_ref();
+    if raw.starts_with("file://") {
+        raw = raw.trim_start_matches("file://");
+    }
+    let decoded = percent_decode(raw);
+    let p = PathBuf::from(&decoded);
+    if p.exists() {
+        return p;
+    }
+    #[cfg(unix)]
+    {
+        if !decoded.starts_with('/') {
+            let with_slash = format!("/{}", decoded.trim_start_matches('/'));
+            let p_slash = PathBuf::from(with_slash);
+            if p_slash.exists() {
+                return p_slash;
+            }
+        }
+    }
+    p
+}
 
 fn probe_media_duration(path: &Path) -> Option<f64> {
     let mut cmd = Command::new("ffprobe");
-    cmd.args(["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1"])
-        .arg(path);
+    cmd.args([
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+    ])
+    .arg(path);
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -24,21 +76,48 @@ fn probe_media_duration(path: &Path) -> Option<f64> {
 impl EditorViewModel {
     pub fn import_media(&mut self, path_opt: Option<PathBuf>) {
         let paths = if let Some(p) = path_opt {
-            vec![p]
+            vec![clean_dropped_path(&p)]
         } else {
             if let Some(files) = rfd::FileDialog::new()
-                .add_filter("Media Files", &["mp4", "mkv", "mov", "avi", "png", "jpg", "jpeg", "webp", "wav", "mp3", "m4a", "ogg"])
-                .pick_files() {
-                files
+                .add_filter(
+                    "Media Files",
+                    &[
+                        "mp4", "mkv", "mov", "avi", "png", "jpg", "jpeg", "webp", "wav", "mp3",
+                        "m4a", "ogg",
+                    ],
+                )
+                .pick_files()
+            {
+                files.into_iter().map(|p| clean_dropped_path(&p)).collect()
             } else {
                 vec![]
             }
         };
 
         for path in paths {
-            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-            let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-            
+            let path = clean_dropped_path(&path);
+            let path_str = path.to_string_lossy().to_string();
+
+            if self
+                .project
+                .media_files
+                .iter()
+                .any(|m| m.path == path_str && !m.on_timeline)
+            {
+                continue;
+            }
+
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let ext = path
+                .extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_lowercase();
+
             let media_type = match ext.as_str() {
                 "mp4" | "mkv" | "mov" | "avi" => MediaType::Video,
                 "png" | "jpg" | "jpeg" | "webp" => MediaType::Image,
@@ -46,24 +125,26 @@ impl EditorViewModel {
             };
 
             let id = format!("media_{}", uuid::Uuid::new_v4());
-            
+
             let probed_duration = if media_type != MediaType::Image {
                 probe_media_duration(&path)
             } else {
                 Some(5.0)
             };
 
-            let duration = if media_type == MediaType::Image { 
-                5.0 
-            } else { 
-                probed_duration.unwrap_or(60.0) 
-            }; 
+            let duration = if media_type == MediaType::Image {
+                5.0
+            } else {
+                probed_duration.unwrap_or(60.0)
+            };
 
-            let path_str = path.to_string_lossy().to_string();
             let mut stored_path = path_str.clone();
 
             if media_type == MediaType::Audio {
-                let extracted_wav = std::env::temp_dir().join("kineticsub_cache").join(&id).join("audio.wav");
+                let extracted_wav = std::env::temp_dir()
+                    .join("kineticsub_cache")
+                    .join(&id)
+                    .join("audio.wav");
                 stored_path = extracted_wav.to_string_lossy().to_string();
             }
 
@@ -77,19 +158,19 @@ impl EditorViewModel {
                     source_height = Some(h);
                     let scale_w = self.project.resolution.0 as f32 / w as f32;
                     let scale_h = self.project.resolution.1 as f32 / h as f32;
-                    scale = 1.0f32.min(scale_w.min(scale_h)); 
+                    scale = 1.0f32.min(scale_w.min(scale_h));
                 }
             }
 
             self.project.media_files.push(MediaFile {
                 id: id.clone(),
-                path: stored_path, 
+                path: stored_path,
                 name,
                 timeline_offset: 0.0,
                 duration,
                 on_timeline: false,
                 media_type: media_type.clone(),
-                track_index: 1, 
+                track_index: 1,
                 color: None,
                 source_fps: None,
                 source_duration: probed_duration,
@@ -113,7 +194,12 @@ impl EditorViewModel {
             });
 
             if media_type != MediaType::Image {
-                self.spawn_media_extractor(id, path_str, media_type == MediaType::Video, self.project.fps);
+                self.spawn_media_extractor(
+                    id,
+                    path_str,
+                    media_type == MediaType::Video,
+                    self.project.fps,
+                );
             }
         }
         self.update_duration();
@@ -129,10 +215,16 @@ impl EditorViewModel {
         }
 
         let mut needs_duration_update = false;
-        
+
         for msg in incoming {
             match msg {
-                PreviewMessage::MetadataReady { id, duration, fps, width, height } => {
+                PreviewMessage::MetadataReady {
+                    id,
+                    duration,
+                    fps,
+                    width,
+                    height,
+                } => {
                     if let Some(m) = self.project.media_files.iter_mut().find(|m| m.id == id) {
                         m.source_duration = Some(duration);
                         if m.media_type == MediaType::Image {
@@ -140,7 +232,9 @@ impl EditorViewModel {
                         } else if !m.on_timeline {
                             m.duration = duration;
                         }
-                        if fps > 0.0 { m.source_fps = Some(fps); }
+                        if fps > 0.0 {
+                            m.source_fps = Some(fps);
+                        }
                         if width > 0 && height > 0 {
                             m.source_width = Some(width);
                             m.source_height = Some(height);
@@ -173,7 +267,7 @@ impl EditorViewModel {
                 PreviewMessage::Error(_) => {}
             }
         }
-        
+
         if needs_duration_update {
             self.update_duration();
         }
@@ -187,9 +281,9 @@ impl EditorViewModel {
             path: "".into(),
             timeline_offset: 0.0,
             duration: 10.0,
-            on_timeline: false, 
+            on_timeline: false,
             media_type: MediaType::Video,
-            track_index: 1, 
+            track_index: 1,
             color: Some(color),
             source_fps: None,
             source_duration: None,
@@ -214,28 +308,54 @@ impl EditorViewModel {
         self.snapshot();
     }
 
-    pub fn spawn_media_extractor(&mut self, id: String, path: String, is_video: bool, project_fps: u32) {
+    pub fn spawn_media_extractor(
+        &mut self,
+        id: String,
+        path: String,
+        is_video: bool,
+        project_fps: u32,
+    ) {
         if self.preview_rx.is_none() {
             let (tx, rx) = mpsc::channel();
             self.preview_rx = Some(rx);
             let tx_clone = tx.clone();
-            std::thread::spawn(move || Self::run_extraction(id, path, is_video, project_fps, tx_clone));
+            std::thread::spawn(move || {
+                Self::run_extraction(id, path, is_video, project_fps, tx_clone)
+            });
         } else if let Some(rx) = self.preview_rx.take() {
             let (tx, new_rx) = mpsc::channel();
             self.preview_rx = Some(new_rx);
             let tx_clone = tx.clone();
-            std::thread::spawn(move || Self::run_extraction(id, path, is_video, project_fps, tx_clone));
             std::thread::spawn(move || {
-                for msg in rx { let _ = tx.send(msg); }
+                Self::run_extraction(id, path, is_video, project_fps, tx_clone)
+            });
+            std::thread::spawn(move || {
+                for msg in rx {
+                    let _ = tx.send(msg);
+                }
             });
         }
     }
 
-    fn run_extraction(id: String, path: String, is_video: bool, project_fps: u32, tx: mpsc::Sender<PreviewMessage>) {
+    fn run_extraction(
+        id: String,
+        path: String,
+        is_video: bool,
+        project_fps: u32,
+        tx: mpsc::Sender<PreviewMessage>,
+    ) {
         let dur_output = Command::new("ffprobe")
-            .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", &path])
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                &path,
+            ])
             .output();
-        
+
         let mut duration = 60.0;
         if let Ok(out) = dur_output {
             if let Ok(d_str) = String::from_utf8(out.stdout) {
@@ -254,35 +374,65 @@ impl EditorViewModel {
 
         let _cmd_audio = Command::new("ffmpeg")
             .args([
-                "-i", &path,
-                "-vn", 
-                "-acodec", "pcm_s16le",
-                "-ar", "44100",
-                "-ac", "2",
+                "-i",
+                &path,
+                "-vn",
+                "-acodec",
+                "pcm_s16le",
+                "-ar",
+                "44100",
+                "-ac",
+                "2",
                 "-y",
-                temp_dir.join("audio.wav").to_str().unwrap()
+                temp_dir.join("audio.wav").to_str().unwrap(),
             ])
             .output();
 
         if is_video {
             let fps_output = Command::new("ffprobe")
-                .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=r_frame_rate", "-of", "default=noprint_wrappers=1:nokey=1", &path])
+                .args([
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=r_frame_rate",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    &path,
+                ])
                 .output();
             if let Ok(out) = fps_output {
                 if let Ok(f_str) = String::from_utf8(out.stdout) {
                     let parts: Vec<&str> = f_str.trim().split('/').collect();
                     if parts.len() == 2 {
-                        if let (Ok(num), Ok(den)) = (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
-                            if den > 0.0 { source_fps = num / den; }
+                        if let (Ok(num), Ok(den)) =
+                            (parts[0].parse::<f64>(), parts[1].parse::<f64>())
+                        {
+                            if den > 0.0 {
+                                source_fps = num / den;
+                            }
                         }
                     } else if parts.len() == 1 {
-                        if let Ok(f) = parts[0].parse::<f64>() { source_fps = f; }
+                        if let Ok(f) = parts[0].parse::<f64>() {
+                            source_fps = f;
+                        }
                     }
                 }
             }
 
             let size_output = Command::new("ffprobe")
-                .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", &path])
+                .args([
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=width,height",
+                    "-of",
+                    "csv=s=x:p=0",
+                    &path,
+                ])
                 .output();
             if let Ok(out) = size_output {
                 if let Ok(s) = String::from_utf8(out.stdout) {
@@ -296,17 +446,27 @@ impl EditorViewModel {
 
             let _cmd_video = Command::new("ffmpeg")
                 .args([
-                    "-i", &path, 
-                    "-vf", "scale=-1:360", 
-                    "-r", &project_fps.to_string(), 
-                    "-q:v", "5", 
+                    "-i",
+                    &path,
+                    "-vf",
+                    "scale=-1:360",
+                    "-r",
+                    &project_fps.to_string(),
+                    "-q:v",
+                    "5",
                     "-y",
-                    temp_dir.join("frame_%04d.jpg").to_str().unwrap()
+                    temp_dir.join("frame_%04d.jpg").to_str().unwrap(),
                 ])
                 .output();
         }
 
-        let _ = tx.send(PreviewMessage::MetadataReady { id: id.clone(), duration, fps: source_fps, width, height });
+        let _ = tx.send(PreviewMessage::MetadataReady {
+            id: id.clone(),
+            duration,
+            fps: source_fps,
+            width,
+            height,
+        });
         let _ = tx.send(PreviewMessage::ExtractionComplete { id });
     }
 
@@ -314,7 +474,7 @@ impl EditorViewModel {
         if let Some(media) = self.project.media_files.iter_mut().find(|m| m.id == id) {
             media.on_timeline = !media.on_timeline;
             if media.on_timeline {
-                media.track_index = 1; 
+                media.track_index = 1;
                 if media.media_type == MediaType::Image {
                     media.duration = 5.0;
                 } else if media.trim_start == 0.0 && !media.name.contains("(Cut)") {
@@ -328,46 +488,73 @@ impl EditorViewModel {
         self.snapshot();
     }
 
-    pub fn move_media(&mut self, index: usize, delta_secs: f64, mut target_track: usize) {
+    pub fn move_media(&mut self, index: usize, delta_secs: f64, target_row: usize) {
         let media = match self.project.media_files.get(index) {
             Some(m) => m.clone(),
-            None    => return,
+            None => return,
         };
-        
-        if target_track == 0 { target_track = 1; }
-        let is_audio = media.media_type == MediaType::Audio;
 
-        let current_row = self.get_track_row(media.track_index, is_audio);
-        let target_row  = self.get_track_row(target_track, is_audio);
+        let track_type = if media.media_type == MediaType::Audio {
+            TrackType::Audio
+        } else {
+            TrackType::Video
+        };
+        let current_row = self.get_track_row(media.track_index, track_type);
 
         let mut final_track = media.track_index;
-        if target_track != media.track_index {
-            if self.can_place_media(Some(&media.id), target_track, is_audio, media.timeline_offset, media.duration) {
-                final_track = target_track;
-            } else {
-                let v_len = self.project.video_track_order.len();
-                let a_len = self.project.audio_track_order.len();
-                let (min_r, max_r) = if !is_audio {
-                    (1, v_len)
-                } else {
-                    (v_len + 1, v_len + a_len)
-                };
+        let (cand_track, cand_type) = self.get_row_track(target_row);
 
-                if target_row > current_row {
-                    for r in target_row..=max_r {
-                        let (cand_track, cand_is_audio) = self.get_row_track(r);
-                        if cand_is_audio == is_audio && self.can_place_media(Some(&media.id), cand_track, is_audio, media.timeline_offset, media.duration) {
-                            final_track = cand_track;
-                            break;
-                        }
+        if cand_type == track_type
+            && self.can_place_media(
+                Some(&media.id),
+                cand_track,
+                track_type,
+                media.timeline_offset,
+                media.duration,
+            )
+        {
+            final_track = cand_track;
+        } else {
+            let s_len = self.project.subtitle_track_order.len();
+            let v_len = self.project.video_track_order.len();
+            let a_len = self.project.audio_track_order.len();
+
+            let (min_r, max_r) = match track_type {
+                TrackType::Subtitle => (0, s_len.saturating_sub(1)),
+                TrackType::Video => (s_len, s_len + v_len - 1),
+                TrackType::Audio => (s_len + v_len, s_len + v_len + a_len - 1),
+            };
+
+            if target_row > current_row {
+                for r in target_row..=max_r {
+                    let (ct, ctt) = self.get_row_track(r);
+                    if ctt == track_type
+                        && self.can_place_media(
+                            Some(&media.id),
+                            ct,
+                            track_type,
+                            media.timeline_offset,
+                            media.duration,
+                        )
+                    {
+                        final_track = ct;
+                        break;
                     }
-                } else if target_row < current_row {
-                    for r in (min_r..=target_row).rev() {
-                        let (cand_track, cand_is_audio) = self.get_row_track(r);
-                        if cand_is_audio == is_audio && self.can_place_media(Some(&media.id), cand_track, is_audio, media.timeline_offset, media.duration) {
-                            final_track = cand_track;
-                            break;
-                        }
+                }
+            } else if target_row < current_row {
+                for r in (min_r..=target_row).rev() {
+                    let (ct, ctt) = self.get_row_track(r);
+                    if ctt == track_type
+                        && self.can_place_media(
+                            Some(&media.id),
+                            ct,
+                            track_type,
+                            media.timeline_offset,
+                            media.duration,
+                        )
+                    {
+                        final_track = ct;
+                        break;
                     }
                 }
             }
@@ -388,16 +575,28 @@ impl EditorViewModel {
                 }
             }
             for sub in self.project.subtitles.iter_mut() {
-                if sub.group_id.as_deref() == Some(gid) || sub.media_id.as_deref() == Some(&media.id) {
+                if sub.group_id.as_deref() == Some(gid)
+                    || sub.media_id.as_deref() == Some(&media.id)
+                {
                     sub.timeline_start = (sub.timeline_start + actual_delta).max(0.0);
-                    sub.timeline_end = (sub.timeline_end + actual_delta).max(sub.timeline_start + 0.05);
+                    sub.timeline_end =
+                        (sub.timeline_end + actual_delta).max(sub.timeline_start + 0.05);
+                    for w in &mut sub.words {
+                        w.start += actual_delta;
+                        w.end += actual_delta;
+                    }
                 }
             }
         } else {
             for sub in self.project.subtitles.iter_mut() {
                 if sub.media_id.as_deref() == Some(&media.id) {
                     sub.timeline_start = (sub.timeline_start + actual_delta).max(0.0);
-                    sub.timeline_end   = (sub.timeline_end   + actual_delta).max(sub.timeline_start + 0.05);
+                    sub.timeline_end =
+                        (sub.timeline_end + actual_delta).max(sub.timeline_start + 0.05);
+                    for w in &mut sub.words {
+                        w.start += actual_delta;
+                        w.end += actual_delta;
+                    }
                 }
             }
         }
@@ -408,7 +607,9 @@ impl EditorViewModel {
     }
 
     pub fn resize_media_clip(&mut self, id: &str, mode: u8, dt: f64) {
-        if dt == 0.0 || (mode != 1 && mode != 2) { return; }
+        if dt == 0.0 || (mode != 1 && mode != 2) {
+            return;
+        }
 
         let target_media = match self.project.media_files.iter().find(|m| m.id == id) {
             Some(m) => m.clone(),
@@ -419,7 +620,9 @@ impl EditorViewModel {
         let is_grouped = group_id.is_some();
 
         let member_ids: Vec<String> = if let Some(ref gid) = group_id {
-            self.project.media_files.iter()
+            self.project
+                .media_files
+                .iter()
                 .filter(|m| m.on_timeline && m.group_id.as_deref() == Some(gid))
                 .map(|m| m.id.clone())
                 .collect()
@@ -439,13 +642,21 @@ impl EditorViewModel {
                 let mut right_neighbor_start = f64::INFINITY;
 
                 for other in &self.project.media_files {
-                    if other.id != m.id && other.on_timeline && other.track_index == m.track_index && (other.media_type == MediaType::Audio) == is_audio {
+                    if other.id != m.id
+                        && other.on_timeline
+                        && other.track_index == m.track_index
+                        && (other.media_type == MediaType::Audio) == is_audio
+                    {
                         let o_end = other.timeline_offset + other.duration;
                         if o_end <= m.timeline_offset + 0.001 {
-                            if o_end > left_neighbor_end { left_neighbor_end = o_end; }
+                            if o_end > left_neighbor_end {
+                                left_neighbor_end = o_end;
+                            }
                         }
                         if other.timeline_offset >= m.timeline_offset + m.duration - 0.001 {
-                            if other.timeline_offset < right_neighbor_start { right_neighbor_start = other.timeline_offset; }
+                            if other.timeline_offset < right_neighbor_start {
+                                right_neighbor_start = other.timeline_offset;
+                            }
                         }
                     }
                 }
@@ -482,9 +693,13 @@ impl EditorViewModel {
             }
         }
 
-        if allowed_min_dt > allowed_max_dt { return; }
+        if allowed_min_dt > allowed_max_dt {
+            return;
+        }
         let effective_dt = dt.clamp(allowed_min_dt, allowed_max_dt);
-        if effective_dt.abs() < 1e-6 { return; }
+        if effective_dt.abs() < 1e-6 {
+            return;
+        }
 
         for m_id in &member_ids {
             if let Some(m) = self.project.media_files.iter_mut().find(|m| &m.id == m_id) {
@@ -505,8 +720,24 @@ impl EditorViewModel {
                     if sub.group_id.as_deref() == Some(gid) {
                         if mode == 1 {
                             sub.timeline_start += effective_dt;
+                            for w in &mut sub.words {
+                                if w.start < sub.timeline_start {
+                                    w.start = sub.timeline_start;
+                                }
+                                if w.end < w.start {
+                                    w.end = w.start + 0.05;
+                                }
+                            }
                         } else if mode == 2 {
                             sub.timeline_end += effective_dt;
+                            for w in &mut sub.words {
+                                if w.end > sub.timeline_end {
+                                    w.end = sub.timeline_end;
+                                }
+                                if w.start > w.end {
+                                    w.start = (w.end - 0.05).max(sub.timeline_start);
+                                }
+                            }
                         }
                     }
                 }
@@ -518,31 +749,48 @@ impl EditorViewModel {
     }
 
     pub fn start_auto_transcription(&mut self, media_id: String) -> bool {
-        let audio_path = match self.project.media_files.iter().find(|m| m.id == media_id) {
-            Some(m) if m.on_timeline && m.media_type != MediaType::Image => {
-                if m.media_type == MediaType::Video {
-                    let extracted_wav = std::env::temp_dir().join("kineticsub_cache").join(&m.id).join("audio.wav");
-                    extracted_wav.to_string_lossy().to_string()
-                } else {
-                    m.path.clone()
+        let (audio_path, clip_start, clip_dur, playback_speed) =
+            match self.project.media_files.iter().find(|m| m.id == media_id) {
+                Some(m) if m.on_timeline && m.media_type != MediaType::Image => {
+                    let p = if m.media_type == MediaType::Video {
+                        let extracted_wav = std::env::temp_dir()
+                            .join("kineticsub_cache")
+                            .join(&m.id)
+                            .join("audio.wav");
+                        extracted_wav.to_string_lossy().to_string()
+                    } else {
+                        m.path.clone()
+                    };
+                    (p, m.trim_start, m.duration, m.playback_speed.max(0.001))
                 }
-            }
-            _ => return false,
-        };
+                _ => return false,
+            };
 
         if !is_model_downloaded(self.selected_whisper_model) {
-            self.whisper_status = format!("Model '{}' not installed.", self.selected_whisper_model.id());
+            self.whisper_status = format!(
+                "Model '{}' not installed.",
+                self.selected_whisper_model.id()
+            );
             self.show_settings_modal = true;
             return false;
         }
 
-        self.project.subtitles.retain(|s| s.media_id.as_deref() != Some(&media_id));
+        self.project
+            .subtitles
+            .retain(|s| s.media_id.as_deref() != Some(&media_id));
 
         let (tx, rx) = mpsc::channel();
         self.whisper_rx = Some(rx);
         self.transcribing_media_id = Some(media_id);
         self.whisper_status = "Initializing Whisper...".into();
-        spawn_transcription(audio_path, self.selected_whisper_model, tx);
+
+        let source_dur = clip_dur * playback_speed;
+        spawn_transcription(
+            audio_path,
+            Some((clip_start, source_dur)),
+            self.selected_whisper_model,
+            tx,
+        );
         true
     }
 
@@ -555,70 +803,115 @@ impl EditorViewModel {
                     }
                     WhisperMessage::Done(words, _duration) => {
                         let media_id = self.transcribing_media_id.clone().unwrap();
-                        let offset = {
-                            match self.project.media_files.iter_mut().find(|m| m.id == media_id) {
-                                Some(m) => { m.timeline_offset }
-                                None    => 0.0,
+                        let (timeline_offset, playback_speed) = {
+                            match self.project.media_files.iter().find(|m| m.id == media_id) {
+                                Some(m) => (m.timeline_offset, m.playback_speed.max(0.001)),
+                                None => (0.0, 1.0),
                             }
                         };
 
-                        let mut next_id = self.next_id;
+                        let mut next_id = self.project.next_subtitle_id;
 
                         match self.transcribe_mode {
                             TranscribeMode::Word => {
                                 for w in words {
-                                    let abs_start = offset + w.start;
-                                    let abs_end   = offset + w.end;
-                                    let mut sub = Subtitle::new(&format!("sub_{}", next_id), &w.text, abs_start, abs_end);
+                                    let abs_start = timeline_offset + (w.start / playback_speed);
+                                    let abs_end = timeline_offset + (w.end / playback_speed);
+                                    let mut sub = Subtitle::new(
+                                        &format!("sub_{}", next_id),
+                                        &w.text,
+                                        abs_start,
+                                        abs_end,
+                                    );
+                                    if let Some(&first_track) =
+                                        self.project.subtitle_track_order.first()
+                                    {
+                                        sub.track_index = first_track;
+                                    }
                                     next_id += 1;
                                     sub.media_id = Some(media_id.clone());
                                     self.project.subtitles.push(sub);
                                 }
                             }
                             TranscribeMode::Phrase => {
-                                let mut current_phrase: std::vec::Vec<crate::models::types::SubtitleWord> = Vec::new();
-                                
-                                let flush_phrase = |phrase: &mut Vec<crate::models::types::SubtitleWord>, proj: &mut crate::models::types::Project, nid: &mut u32| {
-                                    if phrase.is_empty() { return; }
-                                    let start = phrase.first().unwrap().start;
-                                    let end = phrase.last().unwrap().end;
-                                    let text = phrase.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
-                                    
-                                    let mut sub = Subtitle::new(&format!("sub_{}", *nid), &text, start, end);
-                                    *nid += 1;
-                                    
-                                    sub.words = phrase.clone();
-                                    sub.media_id = Some(media_id.clone());
-                                    proj.subtitles.push(sub);
-                                    phrase.clear();
-                                };
+                                let mut current_phrase: std::vec::Vec<
+                                    crate::models::types::SubtitleWord,
+                                > = Vec::new();
+
+                                let flush_phrase =
+                                    |phrase: &mut Vec<crate::models::types::SubtitleWord>,
+                                     proj: &mut crate::models::types::Project,
+                                     nid: &mut usize| {
+                                        if phrase.is_empty() {
+                                            return;
+                                        }
+                                        let start = phrase.first().unwrap().start;
+                                        let end = phrase.last().unwrap().end;
+                                        let text = phrase
+                                            .iter()
+                                            .map(|w| w.text.as_str())
+                                            .collect::<Vec<_>>()
+                                            .join(" ");
+
+                                        let mut sub = Subtitle::new(
+                                            &format!("sub_{}", *nid),
+                                            &text,
+                                            start,
+                                            end,
+                                        );
+                                        if let Some(&first_track) =
+                                            proj.subtitle_track_order.first()
+                                        {
+                                            sub.track_index = first_track;
+                                        }
+                                        *nid += 1;
+
+                                        sub.words = phrase.clone();
+                                        sub.media_id = Some(media_id.clone());
+                                        proj.subtitles.push(sub);
+                                        phrase.clear();
+                                    };
 
                                 for w in words {
-                                    let abs_start = offset + w.start;
-                                    let abs_end   = offset + w.end;
-                                    
-                                    let is_end = w.text.ends_with('.') || w.text.ends_with('?') || w.text.ends_with('!') || w.text.ends_with(',');
+                                    let abs_start = timeline_offset + (w.start / playback_speed);
+                                    let abs_end = timeline_offset + (w.end / playback_speed);
+
+                                    let is_end = w.text.ends_with('.')
+                                        || w.text.ends_with('?')
+                                        || w.text.ends_with('!')
+                                        || w.text.ends_with(',');
 
                                     if !current_phrase.is_empty() {
                                         let last_end = current_phrase.last().unwrap().end;
                                         if abs_start - last_end > 0.4 || current_phrase.len() >= 6 {
-                                            flush_phrase(&mut current_phrase, &mut self.project, &mut next_id);
+                                            flush_phrase(
+                                                &mut current_phrase,
+                                                &mut self.project,
+                                                &mut next_id,
+                                            );
                                         }
                                     }
-                                    
-                                    current_phrase.push(crate::models::types::SubtitleWord { 
-                                        text: w.text.clone(), start: abs_start, end: abs_end, custom_color: None 
+
+                                    current_phrase.push(crate::models::types::SubtitleWord {
+                                        text: w.text.clone(),
+                                        start: abs_start,
+                                        end: abs_end,
+                                        custom_color: None,
                                     });
-                                    
+
                                     if is_end {
-                                        flush_phrase(&mut current_phrase, &mut self.project, &mut next_id);
+                                        flush_phrase(
+                                            &mut current_phrase,
+                                            &mut self.project,
+                                            &mut next_id,
+                                        );
                                     }
                                 }
                                 flush_phrase(&mut current_phrase, &mut self.project, &mut next_id);
                             }
                         }
 
-                        self.next_id = next_id;
+                        self.project.next_subtitle_id = next_id;
                         self.sort_subtitles();
                         self.update_duration();
                         self.whisper_status = "Done!".into();
@@ -636,5 +929,7 @@ impl EditorViewModel {
         }
     }
 
-    pub fn whisper_is_running(&self) -> bool { self.whisper_rx.is_some() }
+    pub fn whisper_is_running(&self) -> bool {
+        self.whisper_rx.is_some()
+    }
 }
